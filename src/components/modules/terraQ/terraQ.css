@@ -1,0 +1,182 @@
+/* Floating Chat Styles */
+.floating-chat-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  .floating-chat-button {
+    width: 60px;
+    height: 60px;
+    border-radius: 30px;
+    background-color: #15803d; /* Green-700 */
+    color: white;
+    border: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .floating-chat-button:hover {
+    transform: scale(1.05);
+    background-color: #166534; /* Green-800 */
+  }
+  
+  .floating-chat-button.hidden {
+    display: none;
+  }
+  
+  .unread-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background-color: #ef4444; /* Red-500 */
+    color: white;
+    border-radius: 10px;
+    min-width: 20px;
+    height: 20px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+  }
+  
+  .floating-chat-window {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 350px;
+    height: 500px;
+    border-radius: 16px;
+    background-color: #f9fafb; /* Gray-50 */
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s ease;
+    transform-origin: bottom right;
+  }
+  
+  .floating-chat-window.open {
+    transform: scale(1);
+    opacity: 1;
+  }
+  
+  .floating-chat-window.closed {
+    transform: scale(0);
+    opacity: 0;
+  }
+  
+  .floating-chat-header {
+    background-color: #15803d; /* Green-700 */
+    color: white;
+    padding: 10px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  }
+  
+  .floating-chat-messages {
+    flex-grow: 1;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    background-color: #f9fafb; /* Gray-50 */
+  }
+  
+  .floating-chat-input {
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid #e5e7eb; /* Gray-200 */
+    background-color: white;
+  }
+  
+  /* Animation for opening chat window */
+  @keyframes popIn {
+    0% {
+      transform: scale(0);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  
+  /* Page Layout Styles */
+  .page-container {
+    min-height: 100vh;
+    background-color: #f9fafb;
+  }
+  
+  .page-content {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .header {
+    background-color: #15803d;
+    color: white;
+    padding: 1rem 2rem;
+  }
+  
+  .header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .logo {
+    font-weight: bold;
+    font-size: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .nav-links {
+    display: flex;
+    gap: 1.5rem;
+  }
+  
+  .nav-link {
+    color: white;
+    text-decoration: none;
+    padding: 0.5rem;
+    border-radius: 0.25rem;
+    transition: background-color 0.2s;
+  }
+  
+  .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  
+  /* Responsive adjustments */
+  @media (max-width: 640px) {
+    .floating-chat-window {
+      bottom: 0;
+      right: 0;
+      width: 100%;
+      height: 90%;
+      border-radius: 16px 16px 0 0;
+    }
+    
+    .floating-chat-button {
+      bottom: 10px;
+      right: 10px;
+    }
+  }
