@@ -1,7 +1,5 @@
 {
   "name": "loryi",
-  "private": true,
-  "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@10.10.0",
   "scripts": {
