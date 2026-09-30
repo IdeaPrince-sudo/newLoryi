@@ -3,9 +3,12 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+
+  // GitHub Pages repository path
+  base: '/newLoryi/',
+
   optimizeDeps: {
-    exclude: ['@heroicons/react'], // keep your current exclude for heroicons if needed
-    include: ['@mui/icons-material/NoteAdd'], // explicitly include MUI icon to pre-bundle
-  }
-})
-  
+    exclude: ['@heroicons/react'],
+    include: ['@mui/icons-material/NoteAdd'],
+  },
+})  
