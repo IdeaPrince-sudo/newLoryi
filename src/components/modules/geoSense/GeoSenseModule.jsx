@@ -4,6 +4,8 @@ import { Bar } from "react-chartjs-2";
 import SoilMap from "./MapProfiles";
 import FAQ from "./FAQ";
 import HelpSupport from "./HelpSupport";
+import { useAuth } from "../../../contexts/AuthContext";
+import { matchOrQueueSoilResult, updateFarmWithSoilResult } from "./farmSoilStore";
 
 import {
   Chart as ChartJS,
@@ -74,9 +76,13 @@ const getWarningDetails = (soilData) => {
 };
 
 export default function GeoSenseModule() {
+  const { currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState("mapProfiles");
   const [location, setLocation] = useState(null);
   const [soilData, setSoilData] = useState(null);
+  const [farmLink, setFarmLink] = useState(null);
+  const [selectedFarmId, setSelectedFarmId] = useState("");
+  const [isUpdatingFarm, setIsUpdatingFarm] = useState(false);
   const [history, setHistory] = useState(() => {
     const stored = localStorage.getItem("soilTestHistory");
     return stored ? JSON.parse(stored) : [];
@@ -96,6 +102,57 @@ export default function GeoSenseModule() {
     pH: "",
     moisture: "",
   });
+
+  const storeSoilResult = async (data, coords) => {
+    setSoilData(data);
+    const link = matchOrQueueSoilResult({ coords, soilData: data, farmerName: currentUser?.name, farmerId: currentUser?.id });
+    const result = await link;
+    setFarmLink(result);
+    setSelectedFarmId(result.status === "needs-farm" && result.farms?.length === 1 ? String(result.farms[0].id) : "");
+    return result;
+  };
+
+  const handleUpdateSelectedFarm = async () => {
+    if (!selectedFarmId || !["needs-farm", "selected-update-error"].includes(farmLink?.status)) return;
+    setIsUpdatingFarm(true);
+    const result = await updateFarmWithSoilResult(selectedFarmId, farmLink.result, currentUser?.id);
+    setFarmLink((current) => result.status === "error"
+      ? { ...current, ...result, status: "selected-update-error" }
+      : result);
+    setIsUpdatingFarm(false);
+  };
+
+  const renderUnmatchedFarmActions = () => (
+    <div className="mt-3 space-y-3">
+      {farmLink.farms?.length > 0 ? (
+        <>
+          <p className="text-sm">
+            You have {farmLink.farms.length} registered {farmLink.farms.length === 1 ? "farm" : "farms"}. Choose one to update with these soil results, or add a new farm.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select
+              aria-label="Select a farm to update with soil results"
+              value={selectedFarmId}
+              onChange={(event) => setSelectedFarmId(event.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-green-700 focus:outline-none focus:ring-2 focus:ring-green-700/20"
+            >
+              <option value="">Choose an existing farm</option>
+              {farmLink.farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.farmName} · {farm.region || "Region not set"}</option>)}
+            </select>
+            <button type="button" disabled={!selectedFarmId || isUpdatingFarm} onClick={handleUpdateSelectedFarm} className="rounded-md bg-green-800 px-3 py-2 text-sm font-semibold text-white hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50">
+              {isUpdatingFarm ? "Updating…" : "Update selected farm"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="text-sm">No farms are registered to your account yet. Add a farm to keep these results with its profile{!farmLink.result.coords ? "; select GPS location in the form to link it accurately" : ""}.</p>
+      )}
+      {farmLink.status === "selected-update-error" && <p role="alert" className="text-sm font-medium text-red-800">{farmLink.message}</p>}
+      <button type="button" onClick={() => setActiveTab("mapProfiles")} className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white hover:bg-green-800">
+        Add new farm with these results
+      </button>
+    </div>
+  );
   const loadingStages = [
     "Collecting soil samples...",
     "Analyzing pH levels...",
@@ -127,11 +184,11 @@ export default function GeoSenseModule() {
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(coords);
         const data = getFakeSoilData(coords);
-        setSoilData(data);
+        await storeSoilResult(data, coords);
         saveToHistory({
           id: Date.now(),
           date: new Date().toLocaleDateString(),
@@ -139,6 +196,8 @@ export default function GeoSenseModule() {
           soilType: data.soilType,
           pH: data.pH,
           moisture: data.moisture,
+          nutrients: data.nutrients,
+          organicMatter: data.organicMatter,
         });
         setActiveTab("soilReport");
       },
@@ -157,12 +216,12 @@ export default function GeoSenseModule() {
     setManualInput((prev) => ({ ...prev, [name]: value }));
   };
 
-  const submitManualData = () => {
+  const submitManualData = async () => {
     if (!manualInput.soilType || !manualInput.pH || !manualInput.moisture) {
       alert("Please fill all fields before submitting.");
       return;
     }
-    const coords = location || { lat: 0, lng: 0 };
+    const coords = location;
     const data = {
       soilType: manualInput.soilType,
       soilDescription: `${manualInput.soilType} soil - typical characteristics.`,
@@ -176,7 +235,7 @@ export default function GeoSenseModule() {
       recommendations: "Maintain good soil management practices.",
       suitableCrops: ["Tomatoes", "Corn", "Soybeans"],
     };
-    setSoilData(data);
+    await storeSoilResult(data, coords);
     saveToHistory({
       id: Date.now(),
       date: new Date().toLocaleDateString(),
@@ -184,6 +243,8 @@ export default function GeoSenseModule() {
       soilType: data.soilType,
       pH: data.pH,
       moisture: data.moisture,
+      nutrients: data.nutrients,
+      organicMatter: data.organicMatter,
     });
     setActiveTab("soilReport");
   };
@@ -221,7 +282,7 @@ export default function GeoSenseModule() {
         return <SoilMap />;
         case "dashboard":
           return (
-            <div className="max-w-lg mx-auto p-6 bg-white rounded-lg ">
+            <div className="mx-auto w-full max-w-lg rounded-lg bg-white p-4 sm:p-6">
               {/* Button to Get User Location */}
               <button
                 onClick={() => {
@@ -246,7 +307,7 @@ export default function GeoSenseModule() {
               </h3>
         
               <form 
-                className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6" 
+                className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-3 sm:gap-6" 
                 onSubmit={e => { 
                   e.preventDefault(); 
                   startAnalysis(); // start animation before showing result
@@ -338,6 +399,18 @@ export default function GeoSenseModule() {
                     ✅ <strong>Latest Soil Data:</strong> {soilData.soilType}, 
                     pH: {soilData.pH}, Moisture: {soilData.moisture}%
                   </p>
+                  {farmLink?.status === "matched" || farmLink?.status === "matched-local" ? (
+                    <p className="mt-2 text-sm">Updated the soil results for <strong>{farmLink.farm.farmName}</strong> at this location ({farmLink.distanceMeters} m match){farmLink.status === "matched-local" ? "; server update unavailable, saved locally" : " on the server"}.</p>
+                  ) : farmLink?.status === "selected-update" || farmLink?.status === "selected-update-local" ? (
+                    <p role="status" className="mt-2 text-sm">Updated <strong>{farmLink.farm.farmName}</strong> with these soil results{farmLink.status === "selected-update-local" ? "; the API was unavailable, so this update is only in this browser" : " on the server"}.</p>
+                  ) : farmLink?.status === "error" ? (
+                    <p role="alert" className="mt-2 text-sm">A nearby farm was found, but its server record could not be updated. Please retry when the API is available; no duplicate farm was created.</p>
+                  ) : farmLink?.status === "needs-farm" || farmLink?.status === "selected-update-error" ? (
+                    <div className="mt-3">
+                      <p className="text-sm">No farm matches this test location.</p>
+                      {renderUnmatchedFarmActions()}
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -392,10 +465,29 @@ export default function GeoSenseModule() {
         };
 
         return (
-          <div className="max-w-4xl mx-auto space-y-8">
-            <h2 className="text-3xl font-extrabold text-green-700 mb-6 text-center">
+          <div className="mx-auto max-w-4xl space-y-6 sm:space-y-8">
+            <h2 className="text-2xl font-extrabold text-green-700 mb-6 text-center sm:text-3xl">
               🌱 Soil Health Report
             </h2>
+
+            {farmLink?.status === "matched" || farmLink?.status === "matched-local" ? (
+              <div className="rounded-md border border-green-300 bg-green-50 p-4 text-sm text-green-900" role="status">
+                This test updated <strong>{farmLink.farm.farmName}</strong>, the registered farm closest to the test location ({farmLink.distanceMeters} m away){farmLink.status === "matched-local" ? "; the API was unavailable, so this update is only in this browser" : " on the server"}.
+              </div>
+            ) : farmLink?.status === "selected-update" || farmLink?.status === "selected-update-local" ? (
+              <div className="rounded-md border border-green-300 bg-green-50 p-4 text-sm text-green-900" role="status">
+                This report updated <strong>{farmLink.farm.farmName}</strong>{farmLink.status === "selected-update-local" ? "; the API was unavailable, so this update is only in this browser" : " on the server"}.
+              </div>
+            ) : farmLink?.status === "error" ? (
+              <div className="rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-900" role="alert">
+                A nearby farm was found, but the server could not update it. Retry the soil test when the API is available; no duplicate farm was created.
+              </div>
+            ) : farmLink?.status === "needs-farm" || farmLink?.status === "selected-update-error" ? (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                <p>No registered farm matches this soil-test location.</p>
+                {renderUnmatchedFarmActions()}
+              </div>
+            ) : null}
 
             {/* Soil Type Card */}
             <div className="bg-white shadow-md rounded-lg p-6 border border-green-200">
@@ -422,7 +514,7 @@ export default function GeoSenseModule() {
             </div>
 
             {/* pH, Moisture & Nutrients Cards */}
-            <div className="grid md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6">
               <div className="bg-white rounded-lg shadow p-5 border border-green-100 text-center">
                 <h4 className="text-lg font-semibold mb-1">🌡 Soil pH</h4>
                 <p className="text-4xl font-bold text-green-600">{soilData.pH}</p>
@@ -473,7 +565,7 @@ export default function GeoSenseModule() {
             </div>
 
             {/* Micronutrients & Organic Matter */}
-            <div className="grid md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6">
               <div className="bg-white rounded-lg shadow p-5 border border-green-100">
                 <h4 className="text-lg font-semibold mb-3 flex items-center space-x-2">
                   <svg
@@ -594,8 +686,8 @@ export default function GeoSenseModule() {
       
         
           return (
-            <div className="max-w-4xl mx-auto bg-white p-6 rounded-lg">
-              <h2 className="text-3xl font-extrabold mb-6 text-green-700 flex items-center gap-2">
+              <div className="mx-auto max-w-4xl rounded-lg bg-white p-4 sm:p-6">
+                <h2 className="flex items-center gap-2 text-2xl font-extrabold mb-6 text-green-700 sm:text-3xl">
                 🧪 Test History
               </h2>
         
@@ -671,9 +763,9 @@ export default function GeoSenseModule() {
   return (
     <div className="h-full">
       {/* Module Header */}
-      <div className="bg-white rounded-lg shadow mb-6 p-6 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-4 rounded-lg bg-white p-4 shadow sm:mb-6 sm:flex-row sm:items-center sm:justify-between sm:p-6">
         <div className="flex items-center space-x-3">
-          <div className="bg-green-600 rounded-full w-10 h-10 flex items-center justify-center">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-600">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-6 w-6 text-white"
@@ -698,13 +790,13 @@ export default function GeoSenseModule() {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white rounded-lg shadow mb-6">
-        <nav className="flex space-x-4 px-6 border-b border-gray-200" aria-label="Tabs">
+      <div className="mb-4 overflow-hidden rounded-lg bg-white shadow sm:mb-6">
+        <nav className="flex min-w-max space-x-2 overflow-x-auto border-b border-gray-200 px-3 sm:space-x-4 sm:px-6" aria-label="Tabs">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-4 text-sm font-medium border-b-2 flex items-center space-x-2 ${
+              className={`flex shrink-0 items-center space-x-2 border-b-2 px-2 py-3 text-sm font-medium sm:px-3 sm:py-4 ${
                 activeTab === tab.id
                   ? "border-green-600 text-green-700"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
@@ -726,7 +818,7 @@ export default function GeoSenseModule() {
       </div>
 
       {/* Content */}
-      <div className="bg-white rounded-lg shadow p-6 min-h-[400px] overflow-auto">{renderContent()}</div>
+      <div className="min-h-[400px] overflow-auto rounded-lg bg-white p-3 shadow sm:p-6">{renderContent()}</div>
     </div>
   );
 }

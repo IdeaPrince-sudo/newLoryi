@@ -1,36 +1,37 @@
-import React, { useState } from 'react';
-import { expertAdvice } from '../fertiWiseData';
+import React, { useEffect, useState } from 'react';
+import { api } from '../../../../lib/api';
 
 const ExpertConsultation = () => {
   const [activeTab, setActiveTab] = useState('book');
   const [consultationType, setConsultationType] = useState('');
+  const [expertId, setExpertId] = useState('');
+  const [consultationMethod, setConsultationMethod] = useState('video');
   const [preferredDate, setPreferredDate] = useState('');
   const [preferredTime, setPreferredTime] = useState('');
   const [farmDetails, setFarmDetails] = useState('');
   const [specificConcerns, setSpecificConcerns] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [agronomists, setAgronomists] = useState([]);
+  const [consultations, setConsultations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
-  // Group experts by specialization
-  const expertsBySpecialization = expertAdvice.reduce((acc, advice) => {
-    if (!acc[advice.expertise]) {
-      acc[advice.expertise] = [];
-    }
-    
-    // Only add unique experts
-    if (!acc[advice.expertise].some(expert => expert.name === advice.expert)) {
-      acc[advice.expertise].push({
-        name: advice.expert,
-        expertise: advice.expertise,
-        available: Math.random() > 0.3 // Randomly set availability for demo
-      });
-    }
-    
-    return acc;
-  }, {});
-  
-  // Get all unique specializations
-  const specializations = Object.keys(expertsBySpecialization);
+  const consultationTypes = ['Fertilizer Management', 'Soil Health', 'Crop Nutrition', 'General Consultation'];
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.agronomists(), api.expertConsultations()])
+      .then(([experts, bookings]) => {
+        if (!active) return;
+        setAgronomists(experts);
+        setConsultations(bookings);
+        setExpertId((current) => current || (experts.length === 1 ? experts[0].id : ''));
+      })
+      .catch((requestError) => { if (active) setError(requestError.message || 'Consultation data could not be loaded.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   // Format date for display
   const formatDate = (dateString) => {
@@ -39,25 +40,34 @@ const ExpertConsultation = () => {
   };
   
   // Handle consultation booking
-  const handleBookConsultation = (e) => {
+  const handleBookConsultation = async (e) => {
     e.preventDefault();
+    setError('');
+    setNotice('');
     setIsSubmitting(true);
-    
-    // Simulate API call with timeout
-    setTimeout(() => {
+    try {
+      const consultation = await api.bookExpertConsultation({
+        expertId,
+        consultationType,
+        method: consultationMethod,
+        preferredDate,
+        preferredTime,
+        farmDetails,
+        specificConcerns,
+      });
+      setConsultations((current) => [consultation, ...current]);
+      setNotice('Your request has been sent to the agronomist. The booking is pending confirmation.');
+      setConsultationType('');
+      setPreferredDate('');
+      setPreferredTime('');
+      setFarmDetails('');
+      setSpecificConcerns('');
+      setActiveTab('history');
+    } catch (requestError) {
+      setError(requestError.message || 'Consultation request could not be booked.');
+    } finally {
       setIsSubmitting(false);
-      setShowSuccess(true);
-      
-      // Reset form after 3 seconds
-      setTimeout(() => {
-        setShowSuccess(false);
-        setConsultationType('');
-        setPreferredDate('');
-        setPreferredTime('');
-        setFarmDetails('');
-        setSpecificConcerns('');
-      }, 3000);
-    }, 1500);
+    }
   };
 
   return (
@@ -101,6 +111,8 @@ const ExpertConsultation = () => {
         </div>
         
         <div className="p-6">
+          {error && <p role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
+          {notice && <p role="status" className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</p>}
           {activeTab === 'book' && (
             <div>
               <div className="mb-6">
@@ -110,52 +122,43 @@ const ExpertConsultation = () => {
                 </p>
               </div>
               
-              {showSuccess ? (
-                <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
-                  <div className="flex">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    <div>
-                      <p className="font-medium text-green-800">Consultation Booked Successfully!</p>
-                      <p className="text-sm text-green-700 mt-1">
-                        You will receive a confirmation email with the details of your consultation.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <form onSubmit={handleBookConsultation}>
+              <form onSubmit={handleBookConsultation}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Consultation Type</label>
+                      <label htmlFor="consultation-type" className="block text-sm font-medium text-gray-700 mb-1">Consultation Type</label>
                       <select
+                        id="consultation-type"
                         required
                         value={consultationType}
                         onChange={(e) => setConsultationType(e.target.value)}
                         className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                       >
                         <option value="">Select Consultation Type</option>
-                        {specializations.map(specialization => (
-                          <option key={specialization} value={specialization}>{specialization}</option>
-                        ))}
-                        <option value="General">General Consultation</option>
+                        {consultationTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label htmlFor="consultation-expert" className="block text-sm font-medium text-gray-700 mb-1">Agronomist</label>
+                      <select id="consultation-expert" required value={expertId} onChange={(event) => setExpertId(event.target.value)} disabled={loading || !agronomists.length} className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 disabled:bg-gray-100">
+                        <option value="">{loading ? 'Loading agronomists…' : agronomists.length ? 'Select an agronomist' : 'No agronomists available'}</option>
+                        {agronomists.map((expert) => <option key={expert.id} value={expert.id}>{expert.name} · {expert.expertise}</option>)}
                       </select>
                     </div>
                     
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Consultation Method</label>
-                      <div className="flex gap-4">
+                      <span className="block text-sm font-medium text-gray-700 mb-1">Consultation Method</span>
+                      <div className="flex flex-wrap gap-x-4 gap-y-2">
                         <label className="flex items-center">
-                          <input type="radio" name="method" value="video" className="text-green-600 focus:ring-green-500 h-4 w-4" />
+                          <input required type="radio" name="method" value="video" checked={consultationMethod === 'video'} onChange={(event) => setConsultationMethod(event.target.value)} className="text-green-600 focus:ring-green-500 h-4 w-4" />
                           <span className="ml-2 text-sm text-gray-700">Video Call</span>
                         </label>
                         <label className="flex items-center">
-                          <input type="radio" name="method" value="audio" className="text-green-600 focus:ring-green-500 h-4 w-4" />
+                          <input type="radio" name="method" value="audio" checked={consultationMethod === 'audio'} onChange={(event) => setConsultationMethod(event.target.value)} className="text-green-600 focus:ring-green-500 h-4 w-4" />
                           <span className="ml-2 text-sm text-gray-700">Audio Call</span>
                         </label>
                         <label className="flex items-center">
-                          <input type="radio" name="method" value="inperson" className="text-green-600 focus:ring-green-500 h-4 w-4" />
+                          <input type="radio" name="method" value="inperson" checked={consultationMethod === 'inperson'} onChange={(event) => setConsultationMethod(event.target.value)} className="text-green-600 focus:ring-green-500 h-4 w-4" />
                           <span className="ml-2 text-sm text-gray-700">In Person</span>
                         </label>
                       </div>
@@ -220,82 +223,41 @@ const ExpertConsultation = () => {
                   <div className="flex justify-between items-center">
                     <div>
                       <p className="text-sm font-medium text-gray-700">Consultation Fee</p>
-                      <p className="text-sm text-gray-500">30 minutes: $25</p>
+                      <p className="text-sm text-gray-500">30 minutes: GH₵250 · Booking request only; payment is not collected here.</p>
                     </div>
                     <button
                       type="submit"
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || loading || !agronomists.length}
                       className={`px-4 py-2 ${
-                        isSubmitting 
+                        isSubmitting || loading || !agronomists.length
                           ? 'bg-gray-400 cursor-not-allowed' 
                           : 'bg-green-600 hover:bg-green-700'
                       } text-white rounded-md transition-colors`}
                     >
-                      {isSubmitting ? 'Booking...' : 'Book Consultation'}
+                        {isSubmitting ? 'Sending request…' : 'Request consultation'}
                     </button>
                   </div>
                 </form>
-              )}
             </div>
           )}
           
           {activeTab === 'experts' && (
             <div>
               <div className="mb-6">
-                <h2 className="text-lg font-medium text-gray-800 mb-2">Our Expert Network</h2>
-                <p className="text-sm text-gray-600">
-                  Meet our network of agricultural experts specializing in various aspects of fertilizer management and soil health.
-                </p>
+                <h2 className="text-lg font-medium text-gray-800 mb-2">Agronomists</h2>
+                <p className="text-sm text-gray-600">Choose an agronomist and request a consultation. Availability is confirmed after your request is reviewed.</p>
               </div>
-              
-              {specializations.map(specialization => (
-                <div key={specialization} className="mb-6">
-                  <h3 className="font-medium text-gray-800 border-b border-gray-200 pb-2 mb-4">{specialization} Specialists</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {expertsBySpecialization[specialization].map((expert, index) => (
-                      <div key={index} className="border border-gray-200 rounded-md overflow-hidden">
-                        <div className="bg-gray-50 p-4 flex items-center">
-                          <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center text-green-800 font-bold text-lg mr-3">
-                            {expert.name.charAt(0)}
-                          </div>
-                          <div>
-                            <h4 className="font-medium text-gray-800">{expert.name}</h4>
-                            <p className="text-xs text-gray-500">{expert.expertise}</p>
-                          </div>
-                        </div>
-                        <div className="p-4">
-                          <div className="flex items-center mb-3">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                              expert.available 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                            }`}>
-                              {expert.available ? 'Available' : 'Currently Busy'}
-                            </span>
-                          </div>
-                          
-                          <button 
-                            className={`w-full px-4 py-2 border text-sm rounded-md ${
-                              expert.available
-                                ? 'border-green-500 text-green-600 hover:bg-green-50'
-                                : 'border-gray-300 text-gray-400 cursor-not-allowed'
-                            }`}
-                            disabled={!expert.available}
-                            onClick={() => {
-                              if (expert.available) {
-                                setActiveTab('book');
-                                setConsultationType(expert.expertise);
-                              }
-                            }}
-                          >
-                            Schedule Consultation
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+              {loading ? <p role="status" className="rounded-md bg-gray-50 p-6 text-center text-sm text-gray-600">Loading agronomists…</p> : agronomists.length ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {agronomists.map((expert) => (
+                  <article key={expert.id} className="overflow-hidden rounded-md border border-gray-200">
+                    <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50 p-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 font-semibold text-green-900">{expert.name.charAt(0).toUpperCase()}</div>
+                      <div><h3 className="font-semibold text-gray-900">{expert.name}</h3><p className="text-xs text-gray-600">{expert.expertise}</p></div>
+                    </div>
+                    <div className="p-4"><p className="text-xs text-gray-500">Agronomist · Booking requests accepted</p><button type="button" onClick={() => { setExpertId(expert.id); setActiveTab('book'); }} className="mt-4 w-full rounded-md border border-green-700 px-3 py-2 text-sm font-semibold text-green-800 hover:bg-green-50">Request consultation</button></div>
+                  </article>
+                ))}
+              </div> : <p className="rounded-md bg-gray-50 p-6 text-center text-sm text-gray-600">No agronomist accounts are currently available for booking.</p>}
             </div>
           )}
           
@@ -303,109 +265,19 @@ const ExpertConsultation = () => {
             <div>
               <div className="mb-6">
                 <h2 className="text-lg font-medium text-gray-800 mb-2">Your Consultation History</h2>
-                <p className="text-sm text-gray-600">
-                  Access records of your previous consultations and follow-up recommendations.
-                </p>
+                <p className="text-sm text-gray-600">View the consultation requests associated with your account.</p>
               </div>
-              
-              {/* Mock consultation history */}
-              <div className="space-y-4">
-                <div className="border border-gray-200 rounded-md overflow-hidden">
-                  <div className="bg-gray-50 p-4 flex justify-between items-center">
-                    <div>
-                      <h3 className="font-medium text-gray-800">Soil Nutrient Management</h3>
-                      <p className="text-xs text-gray-500">Dr. Emma Thompson • 2025-07-15</p>
-                    </div>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Completed
-                    </span>
-                  </div>
-                  <div className="p-4">
-                    <div className="mb-3">
-                      <h4 className="text-sm font-medium text-gray-700 mb-1">Key Recommendations:</h4>
-                      <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
-                        <li>Increase phosphorus application by 15% based on soil test results</li>
-                        <li>Apply calcium nitrate instead of urea during flowering stage</li>
-                        <li>Consider adding organic matter to improve soil structure</li>
-                      </ul>
-                    </div>
-                    <div className="flex justify-end space-x-2">
-                      <button className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200">
-                        Download Report
-                      </button>
-                      <button className="px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700">
-                        Follow-up
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="border border-gray-200 rounded-md overflow-hidden">
-                  <div className="bg-gray-50 p-4 flex justify-between items-center">
-                    <div>
-                      <h3 className="font-medium text-gray-800">Crop-Specific Fertilizer Plan</h3>
-                      <p className="text-xs text-gray-500">Dr. Michael Lee • 2025-06-03</p>
-                    </div>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Completed
-                    </span>
-                  </div>
-                  <div className="p-4">
-                    <div className="mb-3">
-                      <h4 className="text-sm font-medium text-gray-700 mb-1">Key Recommendations:</h4>
-                      <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
-                        <li>Custom fertilizer blend 17-8-22 for your maize fields</li>
-                        <li>Split nitrogen application into 3 phases</li>
-                        <li>Foliar application of micronutrients at V6 stage</li>
-                      </ul>
-                    </div>
-                    <div className="flex justify-end space-x-2">
-                      <button className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200">
-                        Download Report
-                      </button>
-                      <button className="px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700">
-                        Follow-up
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="border border-gray-200 rounded-md overflow-hidden">
-                  <div className="bg-gray-50 p-4 flex justify-between items-center">
-                    <div>
-                      <h3 className="font-medium text-gray-800">Fertilizer Cost Optimization</h3>
-                      <p className="text-xs text-gray-500">Dr. Sarah Johnson • 2025-05-12</p>
-                    </div>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      Follow-up Scheduled
-                    </span>
-                  </div>
-                  <div className="p-4">
-                    <div className="mb-3">
-                      <h4 className="text-sm font-medium text-gray-700 mb-1">Key Recommendations:</h4>
-                      <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
-                        <li>Switch to bulk purchasing from Supplier XYZ</li>
-                        <li>Implement precision application to reduce waste by 22%</li>
-                        <li>Consider biofertilizer supplements to reduce chemical inputs</li>
-                      </ul>
-                    </div>
-                    <div className="flex justify-end space-x-2">
-                      <button className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200">
-                        Download Report
-                      </button>
-                      <button className="px-3 py-1 bg-yellow-600 text-white text-sm rounded-md hover:bg-yellow-700">
-                        View Follow-up
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="mt-6 flex justify-center">
-                <button className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors">
-                  View All Consultations
-                </button>
-              </div>
+              {loading ? <p role="status" className="rounded-md bg-gray-50 p-6 text-center text-sm text-gray-600">Loading consultation history…</p> : consultations.length ? <div className="space-y-3">
+                {consultations.map((consultation) => (
+                  <article key={consultation.id} className="rounded-md border border-gray-200">
+                    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 bg-gray-50 p-4">
+                      <div><h3 className="font-semibold text-gray-900">{consultation.consultationType}</h3><p className="mt-1 text-xs text-gray-600">{consultation.expertName} · {formatDate(consultation.preferredDate)} · {consultation.preferredTime}</p></div>
+                      <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900">{consultation.status}</span>
+                    </header>
+                    <div className="space-y-2 p-4 text-sm text-gray-700"><p><strong>Method:</strong> {consultation.method === 'inperson' ? 'In person' : consultation.method === 'audio' ? 'Audio call' : 'Video call'}</p><p><strong>Farm:</strong> {consultation.farmDetails}</p><p><strong>Concern:</strong> {consultation.specificConcerns}</p><p className="text-xs text-gray-500">30 minutes · GH₵{consultation.feeAmount} · {consultation.feeCurrency}</p></div>
+                  </article>
+                ))}
+              </div> : <div className="rounded-md bg-gray-50 p-6 text-center"><h3 className="font-medium text-gray-900">No consultation requests yet</h3><p className="mt-1 text-sm text-gray-600">Your agronomist booking requests will appear here.</p></div>}
             </div>
           )}
         </div>

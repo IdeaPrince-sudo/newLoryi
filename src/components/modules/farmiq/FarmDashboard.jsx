@@ -88,11 +88,11 @@ const FarmDashboard = () => {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="year" />
                 <YAxis />
-                <Tooltip formatter={(value) => [`$${value}`, '']} />
+                <Tooltip formatter={(value) => [`GH₵${Number(value).toLocaleString()}`, '']} />
                 <Legend />
-                <Line type="monotone" dataKey="revenue" stroke="#22c55e" name="Revenue ($)" strokeWidth={2} />
-                <Line type="monotone" dataKey="expenses" stroke="#ef4444" name="Expenses ($)" strokeWidth={2} />
-                <Line type="monotone" dataKey="profit" stroke="#3b82f6" name="Profit ($)" strokeWidth={2} />
+                <Line type="monotone" dataKey="revenue" stroke="#22c55e" name="Revenue (GHS)" strokeWidth={2} />
+                <Line type="monotone" dataKey="expenses" stroke="#ef4444" name="Expenses (GHS)" strokeWidth={2} />
+                <Line type="monotone" dataKey="profit" stroke="#3b82f6" name="Profit (GHS)" strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -112,7 +112,7 @@ const FarmDashboard = () => {
               <YAxis />
               <Tooltip />
               <Area type="monotone" dataKey="cropYield" stroke="#10b981" fill="#10b98120" name="Crop Yield (kg)" />
-              <Area type="monotone" dataKey="profit" stroke="#3b82f6" fill="#3b82f620" name="Profit ($)" />
+              <Area type="monotone" dataKey="profit" stroke="#3b82f6" fill="#3b82f620" name="Profit (GH₵)" />
             </RechartsAreaChart>
           </ResponsiveContainer>
         </div>

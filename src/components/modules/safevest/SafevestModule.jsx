@@ -11,6 +11,7 @@ const MicroInsurance = lazy(() => import('./insurance/MicroInsurance'));
 const FarmGuards = lazy(() => import('./guards/FarmGuards'));
 const RiskAlerts = lazy(() => import('./alerts/RiskAlerts'));
 const CrowdfundingDashboard = lazy(() => import('./crowdfunding/CrowdfundingDashboard'));
+const BankSafeVestDashboard = lazy(() => import('./BankSafeVestDashboard'));
 
 const SafeVest = () => {
   const { currentUser, updateCredits } = useAuth();
@@ -27,6 +28,14 @@ const SafeVest = () => {
   };
 
   const [activeTab, setActiveTab] = useState('overview');
+
+  if (currentUser?.role === 'bank') {
+    return (
+      <Suspense fallback={<div className="p-4 text-center">Loading...</div>}>
+        <BankSafeVestDashboard onNotice={(message) => window.alert(message)} />
+      </Suspense>
+    );
+  }
 
   // Render tab content and pass userCredits & useCredits to tabs that need them
   const renderTabContent = () => {

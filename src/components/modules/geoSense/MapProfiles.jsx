@@ -1,12 +1,22 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import Map, { Marker, Popup } from "react-map-gl";
+import mapboxgl from "mapbox-gl";
+import L from "leaflet";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
+import { Download, FileSpreadsheet, FileText, MapPin, Plus, Printer, Search, SlidersHorizontal, Sprout, X } from "lucide-react";
+import { clearPendingSoilResult, farmFromPendingSoilResult, loadFarmProfiles, loadPendingSoilResult, saveFarmProfiles } from "./farmSoilStore";
+import { useAuth } from "../../../contexts/AuthContext";
+import { api } from "../../../lib/api";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+const GHANA_REGIONS = [
+  "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern", "Greater Accra", "North East",
+  "Northern", "Oti", "Savannah", "Upper East", "Upper West", "Volta", "Western", "Western North",
+];
 
 const farmTypeIcons = {
   Crop: "🌾",
@@ -16,7 +26,70 @@ const farmTypeIcons = {
   Default: "📍",
 };
 
+const LeafletFarmMap = ({ profiles, onSelect }) => {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerLayerRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return undefined;
+    const map = L.map(containerRef.current).setView([7.9465, -1.0232], 6);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(map);
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
+    resizeObserver.observe(containerRef.current);
+    return () => {
+      resizeObserver.disconnect();
+      map.remove();
+      mapRef.current = null;
+      markerLayerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const markerLayer = markerLayerRef.current;
+    if (!map || !markerLayer) return;
+    markerLayer.clearLayers();
+    const validProfiles = profiles.filter((profile) => Number.isFinite(profile.location?.lat) && Number.isFinite(profile.location?.lng));
+    for (const profile of validProfiles) {
+      const iconText = farmTypeIcons[profile.farmType] || farmTypeIcons.Default;
+      const icon = L.divIcon({
+        className: "",
+        html: `<span style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border:2px solid #16803c;border-radius:50%;background:#fff;font-size:20px;box-shadow:0 1px 5px #0005">${iconText}</span>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+      });
+      const popup = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = profile.farmName || "Farm";
+      popup.append(title, document.createElement("br"));
+      popup.append(document.createTextNode(`Farmer: ${profile.name || "Not set"}`));
+      popup.append(document.createElement("br"));
+      popup.append(document.createTextNode(`Type: ${profile.farmType || "Farm"}`));
+      popup.append(document.createElement("br"));
+      popup.append(document.createTextNode(`Soil: ${profile.soilType || "Not tested"}`));
+      L.marker([profile.location.lat, profile.location.lng], { icon })
+        .bindPopup(popup)
+        .on("click", () => onSelect(profile))
+        .addTo(markerLayer);
+    }
+    if (validProfiles.length > 1) {
+      map.fitBounds(L.latLngBounds(validProfiles.map((profile) => [profile.location.lat, profile.location.lng])).pad(0.12), { maxZoom: 12 });
+    } else if (validProfiles.length === 1) {
+      map.setView([validProfiles[0].location.lat, validProfiles[0].location.lng], 12);
+    }
+  }, [profiles, onSelect]);
+
+  return <div ref={containerRef} role="application" aria-label="Farm locations map" style={{ width: "100%", height: "100%" }} />;
+};
+
 const SoilMap = () => {
+  const { currentUser } = useAuth();
   const [selectedProfile, setSelectedProfile] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [hoveredFarm, setHoveredFarm] = useState(null);
@@ -28,16 +101,78 @@ const SoilMap = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [farmsPerPage] = useState(5);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [farmError, setFarmError] = useState("");
+  const [savedFarm, setSavedFarm] = useState(null);
+  const [editingFarmId, setEditingFarmId] = useState(null);
+  const [farmNotice, setFarmNotice] = useState("");
+  const [mapSupported] = useState(() => {
+    try {
+      return mapboxgl.supported();
+    } catch {
+      return false;
+    }
+  });
 
-  const [farmData, setFarmData] = useState([]);
+  const [farmData, setFarmData] = useState(loadFarmProfiles);
+  const [soilPrefillPending, setSoilPrefillPending] = useState(null);
   const [newFarm, setNewFarm] = useState({
-    name: "", farmName: "", farmType: "Crop", region: "Greater Accra",
+    name: currentUser?.name || "", farmName: "", farmType: "Crop", region: "Greater Accra",
     lat: "", lng: "", locationDescription: "", landSize: "", soilType: "",
     pH: "", moisture: "", N: "", P: "", K: "", organicMatter: "", healthStatus: "",
     suitableCrops: "", livestock: "", aquatic: "", images: []
   });
 
   const mapRef = useRef();
+  const fallbackMapRef = useRef();
+
+  useEffect(() => {
+    let active = true;
+    const migrateLegacyProfiles = async () => {
+      try {
+        let profiles = await api.geoSenseFarms();
+        const migratedIds = new Set(profiles.map((profile) => String(profile.legacyId || "")));
+        const farmNames = new Set(profiles.map((profile) => String(profile.farmName || "").trim().toLowerCase()).filter(Boolean));
+        const legacyProfiles = loadFarmProfiles().filter((profile) => {
+          const legacyId = String(profile.id || "");
+          const farmName = String(profile.farmName || "").trim().toLowerCase();
+          return legacyId && !migratedIds.has(legacyId) && farmName && !farmNames.has(farmName);
+        });
+        let failedMigrations = 0;
+        for (const profile of legacyProfiles) {
+          try {
+            const created = await api.createGeoSenseFarm({ ...profile, legacyId: profile.id, name: currentUser?.name || profile.name });
+            profiles = [...profiles, created];
+            migratedIds.add(String(profile.id));
+            farmNames.add(String(profile.farmName).trim().toLowerCase());
+          } catch {
+            failedMigrations += 1;
+          }
+        }
+        if (!active) return;
+        setFarmData(profiles);
+        saveFarmProfiles(profiles);
+        setFarmError(failedMigrations
+          ? `${failedMigrations} older farm ${failedMigrations === 1 ? "record was" : "records were"} not imported. Your server farms are available.`
+          : "");
+      } catch (error) {
+        if (active) setFarmError(error.message || "Farm records could not be synchronized with the server.");
+      }
+    };
+
+    migrateLegacyProfiles();
+    const pending = loadPendingSoilResult();
+    if (pending) {
+      const farmName = pending.coords
+        ? `Farm at ${pending.coords.lat.toFixed(3)}, ${pending.coords.lng.toFixed(3)}`
+        : "New Farm";
+      setNewFarm((current) => farmFromPendingSoilResult(pending, { ...current, farmName }));
+      setSoilPrefillPending(pending);
+      setShowAddDialog(true);
+    }
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id, currentUser?.name]);
 
   const sampleProfiles = [
     // Greater Accra
@@ -783,28 +918,133 @@ const SoilMap = () => {
       return sortOrder === "asc" ? valA.toString().localeCompare(valB.toString()) : valB.toString().localeCompare(valA.toString());
     });
 
+  const filteredMyFarms = farmData
+    .filter((farm) => {
+      const term = searchTerm.toLowerCase();
+      const matchesSearch = farm.farmName.toLowerCase().includes(term) || farm.name.toLowerCase().includes(term);
+      const matchesType = farmTypeFilter === "All" || farm.farmType === farmTypeFilter;
+      const matchesRegion = regionFilter === "All" || farm.region === regionFilter;
+      return matchesSearch && matchesType && matchesRegion;
+    })
+    .sort((first, second) => {
+      const firstValue = first[sortKey] || "";
+      const secondValue = second[sortKey] || "";
+      return sortOrder === "asc" ? firstValue.toString().localeCompare(secondValue.toString()) : secondValue.toString().localeCompare(firstValue.toString());
+    });
+
   // Pagination
   const indexOfLast = currentPage * farmsPerPage;
-  const currentFarms = filteredProfiles.slice(indexOfLast - farmsPerPage, indexOfLast);
-  const totalPages = Math.ceil(filteredProfiles.length / farmsPerPage);
+  const currentFarms = filteredMyFarms.slice(indexOfLast - farmsPerPage, indexOfLast);
+  const totalPages = Math.max(1, Math.ceil(filteredMyFarms.length / farmsPerPage));
 
   const handleRowClick = (p) => {
     setSelectedProfile(p);
     setShowDetailsModal(true);
-    mapRef.current?.flyTo({ center: [p.location.lng, p.location.lat], zoom: 12 });
+    if (mapSupported) mapRef.current?.flyTo({ center: [p.location.lng, p.location.lat], zoom: 12 });
+    else fallbackMapRef.current?.flyTo([p.location.lat, p.location.lng], 12);
   };
 
-  const handleAddFarm = (e) => {
+  const handleAddFarm = async (e) => {
     e.preventDefault();
+    setFarmError("");
+    const normalizedFarmName = newFarm.farmName.trim().toLowerCase();
+    if (farmData.some((farm) => farm.id !== editingFarmId && farm.farmName?.trim().toLowerCase() === normalizedFarmName)) {
+      setFarmError("You already have a farm with this name. Enter a different name.");
+      return;
+    }
+    const selectedLocation = newFarm.location && Number.isFinite(newFarm.location.lat) && Number.isFinite(newFarm.location.lng)
+      ? newFarm.location
+      : { lat: parseFloat(newFarm.lat), lng: parseFloat(newFarm.lng) };
+    if (!Number.isFinite(selectedLocation.lat) || !Number.isFinite(selectedLocation.lng)) {
+      setFarmError("Select the farm location with Use Current Location before saving.");
+      return;
+    }
     const newFarmObj = {
       id: Date.now(),
       ...newFarm,
-      location: { lat: parseFloat(newFarm.lat), lng: parseFloat(newFarm.lng) },
-      suitableCrops: newFarm.suitableCrops.split(",").map(c => c.trim())
+      farmName: newFarm.farmName.trim(),
+      name: currentUser?.name || "",
+      location: selectedLocation,
+      pH: newFarm.pH === "" ? "" : Number(newFarm.pH),
+      moisture: newFarm.moisture === "" ? "" : Number(newFarm.moisture),
+      N: newFarm.N === "" ? "" : Number(newFarm.N),
+      P: newFarm.P === "" ? "" : Number(newFarm.P),
+      K: newFarm.K === "" ? "" : Number(newFarm.K),
+      organicMatter: newFarm.organicMatter === "" ? "" : Number(newFarm.organicMatter),
+      suitableCrops: Array.isArray(newFarm.suitableCrops) ? newFarm.suitableCrops : newFarm.suitableCrops.split(",").map(c => c.trim()).filter(Boolean),
     };
-    setFarmData([...farmData, newFarmObj]);
-    setShowAddDialog(false);
-    setNewFarm({ ...newFarm, name: "", farmName: "", lat: "", lng: "", images: [] });
+    try {
+      const savedProfile = editingFarmId
+        ? await api.updateGeoSenseFarm(editingFarmId, newFarmObj)
+        : await api.createGeoSenseFarm(newFarmObj);
+      const updatedProfiles = editingFarmId
+        ? farmData.map((farm) => farm.id === editingFarmId ? savedProfile : farm)
+        : [savedProfile, ...farmData];
+      setFarmData(updatedProfiles);
+      saveFarmProfiles(updatedProfiles);
+      setSearchTerm(savedProfile.farmName);
+      setFarmTypeFilter("All");
+      setRegionFilter("All");
+      setCurrentPage(1);
+      if (soilPrefillPending && !editingFarmId) {
+        clearPendingSoilResult();
+        setSoilPrefillPending(null);
+      }
+      setShowAddDialog(false);
+      setSavedFarm(editingFarmId ? null : savedProfile);
+      setFarmNotice(editingFarmId ? `Farm "${savedProfile.farmName}" updated.` : "");
+      setEditingFarmId(null);
+      setNewFarm({ name: currentUser?.name || "", farmName: "", farmType: "Crop", region: "Greater Accra", lat: "", lng: "", location: null, locationDescription: "", landSize: "", soilType: "", pH: "", moisture: "", N: "", P: "", K: "", organicMatter: "", healthStatus: "", suitableCrops: "", livestock: "", aquatic: "", images: [] });
+    } catch (requestError) {
+      setFarmError(requestError.message || "Farm could not be saved. Check your connection and try again.");
+    }
+  };
+
+  const startAddFarm = () => {
+    setFarmError("");
+    setEditingFarmId(null);
+    setSoilPrefillPending(null);
+    setNewFarm({ name: currentUser?.name || "", farmName: "", farmType: "Crop", region: "Greater Accra", lat: "", lng: "", location: null, locationDescription: "", landSize: "", soilType: "", pH: "", moisture: "", N: "", P: "", K: "", organicMatter: "", healthStatus: "", suitableCrops: "", livestock: "", aquatic: "", images: [] });
+    setShowAddDialog(true);
+  };
+
+  const startEditFarm = (farm) => {
+    setFarmError("");
+    setEditingFarmId(farm.id);
+    setSoilPrefillPending(null);
+    setNewFarm({
+      ...farm,
+      name: currentUser?.name || "",
+      location: farm.location || null,
+      pH: farm.pH ?? "",
+      moisture: farm.moisture ?? "",
+      N: farm.N ?? "",
+      P: farm.P ?? "",
+      K: farm.K ?? "",
+      organicMatter: farm.organicMatter ?? "",
+      suitableCrops: Array.isArray(farm.suitableCrops) ? farm.suitableCrops.join(", ") : farm.suitableCrops || "",
+    });
+    setShowAddDialog(true);
+  };
+
+  const removeFarm = async (farm) => {
+    if (!window.confirm(`Delete farm "${farm.farmName}"? This cannot be undone.`)) return;
+    setFarmError("");
+    try {
+      await api.deleteGeoSenseFarm(farm.id);
+      const updatedProfiles = farmData.filter((profile) => profile.id !== farm.id);
+      setFarmData(updatedProfiles);
+      saveFarmProfiles(updatedProfiles);
+      if (selectedProfile?.id === farm.id) {
+        setSelectedProfile(null);
+        setShowDetailsModal(false);
+      }
+      setSearchTerm("");
+      setCurrentPage(1);
+      setFarmNotice(`Farm "${farm.farmName}" deleted.`);
+    } catch (requestError) {
+      setFarmError(requestError.message || "Farm could not be deleted. Check your connection and try again.");
+    }
   };
 
   const handleImageUpload = (e) => {
@@ -842,32 +1082,52 @@ const SoilMap = () => {
 
   return (
     <div style={{ fontFamily: "Arial", padding: 20 }}>
-      <h1 style={{ textAlign: "center", color: "#27ae60" }}>🌍 Farm & Soil Dashboard</h1>
+      <section aria-label="Farm map controls" className="mb-4 rounded-lg border border-gray-200 bg-white p-3 shadow-sm sm:p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+          <label className="min-w-0 flex-1 text-xs font-semibold text-gray-600">
+            Search farms
+            <span className="relative mt-1.5 block">
+              <Search size={17} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={searchTerm}
+                onChange={(event) => { setSearchTerm(event.target.value); setCurrentPage(1); }}
+                placeholder="Name or farm name"
+                className="w-full rounded-md border border-gray-300 bg-gray-50 py-2.5 pl-9 pr-9 text-sm font-normal text-gray-900 outline-none transition focus:border-emerald-700 focus:bg-white focus:ring-2 focus:ring-emerald-700/15"
+              />
+              {searchTerm && <button type="button" onClick={() => setSearchTerm("")} aria-label="Clear farm search" title="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><X size={15} aria-hidden="true" /></button>}
+            </span>
+          </label>
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-        <input
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search farms..."
-          style={{ flex: 1, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
-        />
-        <select value={farmTypeFilter} onChange={(e) => setFarmTypeFilter(e.target.value)} style={{ padding: 6, borderRadius: 4 }}>
-          <option>All</option><option>Crop</option><option>Livestock</option><option>Aquatic</option><option>Mixed</option>
-        </select>
-        <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} style={{ padding: 6, borderRadius: 4 }}>
-          <option>All</option><option>Greater Accra</option><option>Ashanti</option><option>Northern</option><option>Volta</option>
-        </select>
-        <button onClick={() => setShowAddDialog(true)} style={{ backgroundColor: "#27ae60", color: "white", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer" }}>
-          + Add Farm
-        </button>
-        <button onClick={exportToExcel} style={{ padding: "6px 12px", borderRadius: 4, cursor: "pointer" }}>Export Excel</button>
-        <button onClick={exportToPDF} style={{ padding: "6px 12px", borderRadius: 4, cursor: "pointer" }}>Export PDF</button>
-      </div>
+          <label className="text-xs font-semibold text-gray-600 xl:w-40">
+            Farm type
+            <span className="relative mt-1.5 block">
+              <SlidersHorizontal size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <select value={farmTypeFilter} onChange={(event) => { setFarmTypeFilter(event.target.value); setCurrentPage(1); }} className="w-full appearance-none rounded-md border border-gray-300 bg-gray-50 py-2.5 pl-9 pr-3 text-sm font-normal text-gray-900 outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15">
+                <option>All</option><option>Crop</option><option>Livestock</option><option>Aquatic</option><option>Mixed</option>
+              </select>
+            </span>
+          </label>
+
+          <label className="text-xs font-semibold text-gray-600 xl:w-44">
+            Region
+            <select value={regionFilter} onChange={(event) => { setRegionFilter(event.target.value); setCurrentPage(1); }} className="mt-1.5 block w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm font-normal text-gray-900 outline-none focus:border-emerald-700 focus:bg-white focus:ring-2 focus:ring-emerald-700/15">
+              <option>All</option>{GHANA_REGIONS.map((region) => <option key={region}>{region}</option>)}
+            </select>
+          </label>
+
+          <div className="flex items-center justify-between gap-3 border-t border-gray-100 pt-3 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+            <span className="whitespace-nowrap text-sm text-gray-500"><strong className="text-gray-900">{filteredProfiles.length}</strong> results</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={exportToExcel} title="Export Excel" className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-emerald-700 hover:bg-emerald-50 hover:text-emerald-900"><FileSpreadsheet size={16} aria-hidden="true" /><span className="hidden sm:inline">Excel</span></button>
+              <button type="button" onClick={exportToPDF} title="Export PDF" className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-emerald-700 hover:bg-emerald-50 hover:text-emerald-900"><FileText size={16} aria-hidden="true" /><span className="hidden sm:inline">PDF</span><Download size={13} aria-hidden="true" className="hidden sm:block" /></button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Map */}
-      <div style={{ height: "90vh", marginBottom: 20 }}>
-        <Map
+      <div style={{ width: "100%", height: "clamp(320px, 58vh, 640px)", minHeight: 320, marginBottom: 20 }}>
+        {mapSupported ? <Map
           ref={mapRef}
           initialViewState={{ longitude: -1.0232, latitude: 7.9465, zoom: 6 }}
           style={{ width: "100%", height: "100%" }}
@@ -915,70 +1175,64 @@ const SoilMap = () => {
               </div>
             </Popup>
           )}
-        </Map>
+        </Map> : <LeafletFarmMap profiles={filteredProfiles} onSelect={handleRowClick} />}
       </div>
 
-      {/* Farm List Table */}
-     
-{/* Farm List Table */}
-<h2 style={{ marginBottom: 12, color: "#27ae60", fontWeight: "bold" }}>📋 Farm List</h2>
-<table
-  style={{
-    width: "100%",
-    borderCollapse: "collapse",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-    fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-  }}
-  aria-label="List of farms"
->
-  <thead style={{ backgroundColor: "#27ae60", color: "white" }}>
-    <tr>
-      {["Farm Name", "Farmer", "Type", "Region", "Soil", "Health"].map((header) => (
-        <th key={header} style={{ padding: "12px 15px", textAlign: "left" }}>
-          {header}
-        </th>
-      ))}
-    </tr>
-  </thead>
-  <tbody>
-    {currentFarms.length === 0 ? (
-      <tr>
-        <td colSpan={6} style={{ textAlign: "center", padding: "15px" }}>
-          No farms found.
-        </td>
-      </tr>
-    ) : (
-      currentFarms.map((p, index) => (
-        <tr
-          key={p.id}
-          onClick={() => handleRowClick(p)}
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleRowClick(p);
-          }}
-          style={{
-            cursor: "pointer",
-            backgroundColor: index % 2 === 0 ? "#f9f9f9" : "#fff",
-            transition: "background-color 0.3s ease",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#d4f1d4")}
-          onMouseLeave={(e) =>
-            (e.currentTarget.style.backgroundColor = index % 2 === 0 ? "#f9f9f9" : "#fff")
-          }
-          role="row"
-          aria-label={`Farm ${p.farmName} by ${p.name}`}
-        >
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.farmName}</td>
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.name}</td>
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.farmType}</td>
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.region}</td>
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.soilType}</td>
-          <td style={{ padding: "10px 15px", borderBottom: "1px solid #ddd" }}>{p.healthStatus}</td>
-        </tr>
-      ))
-    )}
-  </tbody>
-</table>
+      <section aria-labelledby="farm-list" className="mt-6 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-4 py-4 sm:px-5">
+          <div>
+            <h2 id="farm-list" className="text-lg font-semibold text-gray-950">Farm List</h2>
+            <p className="mt-0.5 text-sm text-gray-500">Select a farm to inspect its profile and soil readings.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">{filteredMyFarms.length} {filteredMyFarms.length === 1 ? "farm" : "farms"}</span>
+            <button type="button" onClick={startAddFarm} className="inline-flex items-center gap-2 rounded-md bg-emerald-800 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-700/30">
+              <Plus size={16} aria-hidden="true" />Add farm
+            </button>
+          </div>
+        </header>
+        {farmNotice && <p role="status" className="mx-4 mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 sm:mx-5">{farmNotice}</p>}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] border-collapse text-left text-sm" aria-label="List of farms">
+            <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+              <tr>
+                {["Farm", "Farmer", "Type", "Region", "Soil", "Health", "Manage"].map((header) => (
+                  <th key={header} className="border-b border-gray-200 px-4 py-3 font-semibold first:pl-5">{header}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {currentFarms.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-500">{farmData.length ? "No farms match these filters." : "You have not added a farm yet."}</td></tr>
+              ) : currentFarms.map((farm) => (
+                <tr
+                  key={farm.id}
+                  onClick={() => handleRowClick(farm)}
+                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleRowClick(farm); } }}
+                  tabIndex={0}
+                  aria-label={`Open ${farm.farmName}, farm owned by ${farm.name}`}
+                  className="cursor-pointer transition-colors hover:bg-emerald-50/60 focus:bg-emerald-50 focus:outline-none"
+                >
+                  <td className="px-4 py-3.5 pl-5"><span className="block font-semibold text-gray-950">{farm.farmName}</span><span className="mt-0.5 block text-xs text-gray-500">{farm.landSize || "Farm profile"}</span></td>
+                  <td className="px-4 py-3.5 text-gray-700">{farm.name}</td>
+                  <td className="px-4 py-3.5"><span className="inline-flex rounded-full bg-lime-50 px-2.5 py-1 text-xs font-medium text-lime-800">{farm.farmType}</span></td>
+                  <td className="px-4 py-3.5 text-gray-700">{farm.region}</td>
+                  <td className="px-4 py-3.5 text-gray-700">{farm.soilType || "Not tested"}{farm.pH !== "" && farm.pH !== undefined && <span className="mt-0.5 block text-xs text-gray-500">pH {farm.pH}</span>}</td>
+                  <td className="px-4 py-3.5"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${/poor|high|urgent|attention/i.test(farm.healthStatus || "") ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>{farm.healthStatus || "Not assessed"}</span></td>
+                  <td className="px-4 py-3.5" onClick={(event) => event.stopPropagation()}>
+                    {farm.ownerId === currentUser?.id ? (
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => startEditFarm(farm)} className="rounded border border-emerald-700 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50">Edit</button>
+                        <button type="button" onClick={() => removeFarm(farm)} className="rounded border border-red-300 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
+                      </div>
+                    ) : <span className="text-xs text-gray-400">Demo profile</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
 {/* Pagination Controls */}
 <div
@@ -1030,73 +1284,81 @@ const SoilMap = () => {
   </button>
 </div>
 
-
       {/* Farm Details Modal */}
       {showDetailsModal && selectedProfile && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            zIndex: 1000,
-          }}
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-gray-950/55 p-3 backdrop-blur-sm sm:p-6"
           onClick={() => setShowDetailsModal(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: "#fff", padding: 20, borderRadius: 8, width: "90%", maxWidth: 600 }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="farm-profile-title"
+            className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-gray-50 shadow-2xl"
           >
-            <h2>
-            <b>Farm Name:</b> {selectedProfile.farmName} 
-            </h2>
-            <h2><b>Farm Type:</b> {selectedProfile.farmType}</h2>
-            <p><b>Farmer:</b> {selectedProfile.name}</p>
-            <p><b>Region:</b> {selectedProfile.region}</p>
-            <p><b>Location:</b> {selectedProfile.locationDescription}</p>
-            <p><b>Land Size:</b> {selectedProfile.landSize}</p>
-            <p><b>Soil Type:</b> {selectedProfile.soilType}</p>
-            <p><b>pH:</b> {selectedProfile.pH}</p>
-            <p><b>Moisture:</b> {selectedProfile.moisture}%</p>
-            <p><b>Organic Matter:</b> {selectedProfile.organicMatter}%</p>
-            <p><b>Health Status:</b> {selectedProfile.healthStatus}</p>
-            <p><b>Suitable Crops:</b> {selectedProfile.suitableCrops.join(", ")}</p>
-            <p><b>Livestock:</b> {selectedProfile.livestock}</p>
-            <p><b>Aquatic:</b> {selectedProfile.aquatic}</p>
+            <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-emerald-100 bg-white px-5 py-5 sm:px-7">
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase text-emerald-800">Farm profile</p>
+                <h2 id="farm-profile-title" className="mt-1 truncate text-2xl font-bold text-gray-950">{selectedProfile.farmName || "Unnamed farm"}</h2>
+                <p className="mt-1 text-sm text-gray-600">Managed by {selectedProfile.name || "Farmer not recorded"}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-900">{selectedProfile.farmType || "Farm"}</span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700"><MapPin size={13} aria-hidden="true" />{selectedProfile.region || "Region not set"}</span>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowDetailsModal(false)} aria-label="Close farm profile" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900"><X size={19} aria-hidden="true" /></button>
+            </header>
 
-            {/* Images */}
-            <div style={{ display: "flex", gap: 10, overflowX: "auto", marginBottom: 12 }}>
-              {selectedProfile.images?.length > 0 ? (
-                selectedProfile.images.map((img, i) => (
-                  <img key={i} src={img} alt="Farm" width="100" style={{ borderRadius: 6 }} />
-                ))
-              ) : (
-                <p>No images uploaded.</p>
-              )}
+            <div className="space-y-5 p-4 sm:p-7">
+              <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Soil summary">
+                <FarmMetric label="Soil type" value={selectedProfile.soilType || "Not tested"} />
+                <FarmMetric label="pH" value={selectedProfile.pH ?? "—"} />
+                <FarmMetric label="Moisture" value={selectedProfile.moisture === "" || selectedProfile.moisture === undefined ? "—" : `${selectedProfile.moisture}%`} />
+                <FarmMetric label="Organic matter" value={selectedProfile.organicMatter === "" || selectedProfile.organicMatter === undefined ? "—" : `${selectedProfile.organicMatter}%`} />
+              </section>
+
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+                <section className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div><h3 className="font-semibold text-gray-950">Soil nutrients</h3><p className="mt-1 text-xs text-gray-500">Recorded NPK values</p></div>
+                    <Sprout className="text-emerald-700" size={20} aria-hidden="true" />
+                  </div>
+                  <div className="mt-4 h-56 min-w-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={[{ name: "Nitrogen", value: Number(selectedProfile.N) || 0 }, { name: "Phosphorus", value: Number(selectedProfile.P) || 0 }, { name: "Potassium", value: Number(selectedProfile.K) || 0 }]} margin={{ top: 8, right: 12, left: -18, bottom: 4 }}>
+                        <XAxis dataKey="name" tick={{ fill: "#4b5563", fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <Tooltip cursor={{ fill: "#f0fdf4" }} contentStyle={{ borderRadius: 8, borderColor: "#d1d5db" }} />
+                        <Bar dataKey="value" name="Level" fill="#16803c" radius={[5, 5, 0, 0]} maxBarSize={48} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </section>
+
+                <section className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                  <h3 className="font-semibold text-gray-950">Farm details</h3>
+                  <Detail label="Location" value={selectedProfile.locationDescription || (selectedProfile.location ? `${selectedProfile.location.lat.toFixed(5)}, ${selectedProfile.location.lng.toFixed(5)}` : "Not recorded")} />
+                  <Detail label="Land size" value={selectedProfile.landSize || "Not recorded"} />
+                  <Detail label="Health status" value={selectedProfile.healthStatus || "Not assessed"} />
+                  <Detail label="Suitable crops" value={Array.isArray(selectedProfile.suitableCrops) ? selectedProfile.suitableCrops.join(", ") || "Not recorded" : selectedProfile.suitableCrops || "Not recorded"} />
+                  <Detail label="Livestock" value={selectedProfile.livestock || "None recorded"} />
+                  <Detail label="Aquatic" value={selectedProfile.aquatic || "None recorded"} />
+                </section>
+              </div>
+
+              <section className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                <h3 className="font-semibold text-gray-950">Farm photos</h3>
+                {selectedProfile.images?.length > 0 ? (
+                  <div className="mt-3 flex gap-3 overflow-x-auto pb-1">{selectedProfile.images.map((image, index) => <img key={`${image}-${index}`} src={image} alt={`${selectedProfile.farmName} view ${index + 1}`} className="h-24 w-32 rounded-md object-cover" />)}</div>
+                ) : <p className="mt-2 text-sm text-gray-500">No images uploaded.</p>}
+              </section>
+
+              <footer className="flex flex-wrap justify-end gap-2 border-t border-gray-200 pt-4">
+                <button type="button" onClick={printFarm} className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"><Printer size={16} aria-hidden="true" />Print report</button>
+                <button type="button" onClick={() => setShowDetailsModal(false)} className="rounded-md bg-emerald-800 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-900">Close profile</button>
+              </footer>
             </div>
-
-            <h3>Soil NPK Chart</h3>
-            <ResponsiveContainer width="100%" height={120}>
-              <BarChart
-                data={[
-                  { name: "N", value: selectedProfile.N },
-                  { name: "P", value: selectedProfile.P },
-                  { name: "K", value: selectedProfile.K },
-                ]}
-              >
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" fill="#27ae60" />
-              </BarChart>
-            </ResponsiveContainer>
-
-            <button onClick={printFarm} style={{ marginRight: 10 }}>
-              🖨 Print Report
-            </button>
-            <button onClick={() => setShowDetailsModal(false)}>Close</button>
           </div>
         </div>
       )}
@@ -1107,12 +1369,12 @@ const SoilMap = () => {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.5)",
+            background: "rgba(15, 23, 20, 0.58)",
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
             overflowY: "auto",
-            padding: 20,
+            padding: 16,
             zIndex: 9999,
           }}
           role="dialog"
@@ -1120,46 +1382,72 @@ const SoilMap = () => {
         >
           <form
             onSubmit={handleAddFarm}
+            className="geosense-farm-editor"
             style={{
-              background: "white",
-              padding: 20,
-              borderRadius: 8,
+              background: "#f8faf8",
+              padding: 0,
+              borderRadius: 12,
+              border: "1px solid #dce8dc",
               width: "100%",
-              maxWidth: 600,
-              maxHeight: "90vh",
+              maxWidth: 820,
+              maxHeight: "92vh",
               overflowY: "auto",
+              boxShadow: "0 24px 70px rgba(0,0,0,0.24)",
             }}
           >
-            <h2 style={{ marginTop: 0, marginBottom: 20 }}>Add New Farm</h2>
+            <header className="geosense-farm-editor-header">
+              <div>
+                <span className="geosense-farm-editor-eyebrow">Farm profile</span>
+                <h2>{editingFarmId ? "Update Farm" : "Add New Farm"}</h2>
+                <p>{editingFarmId ? "Keep your farm details and soil records current." : "Create a farm profile with location and soil details."}</p>
+              </div>
+              <div className="geosense-farm-editor-header-actions">
+                <span className="geosense-farm-editor-owner">{currentUser?.name || "Signed-in farmer"}</span>
+                <button type="button" onClick={() => { setShowAddDialog(false); setEditingFarmId(null); setFarmError(""); }} aria-label="Close farm form" title="Close" className="geosense-farm-editor-close"><X size={18} aria-hidden="true" /></button>
+              </div>
+            </header>
+            {farmError && <p className="geosense-farm-editor-error" role="alert">{farmError}</p>}
+            {soilPrefillPending && (
+              <div className="geosense-farm-editor-prefill">
+                <strong>Soil results ready to attach</strong>
+                <span>Review the prefilled readings, then save this farm to keep them with its profile.</span>
+              </div>
+            )}
+
+            <section className="geosense-farm-editor-group">
+            <div className="geosense-farm-editor-section">
+              <span>01</span><div><h3>Farm identity</h3><p>Who owns this farm and how should it be listed?</p></div>
+            </div>
 
             <label>
-              Farmer Name*:
+              Farmer name
               <input
                 type="text"
                 value={newFarm.name}
-                onChange={(e) => setNewFarm({ ...newFarm, name: e.target.value })}
+                readOnly
                 required
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                title="Set from your signed-in account"
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d9d1", background: "#eef3ee", color: "#4b5d4b" }}
               />
             </label>
 
             <label>
-              Farm Name*:
+              Farm name
               <input
                 type="text"
                 value={newFarm.farmName}
                 onChange={(e) => setNewFarm({ ...newFarm, farmName: e.target.value })}
                 required
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Farm Type:
+              Farm type
               <select
                 value={newFarm.farmType}
                 onChange={(e) => setNewFarm({ ...newFarm, farmType: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               >
                 <option>Crop</option>
                 <option>Livestock</option>
@@ -1169,28 +1457,34 @@ const SoilMap = () => {
             </label>
 
             <label>
-              Region:
+              Region
               <select
                 value={newFarm.region}
                 onChange={(e) => setNewFarm({ ...newFarm, region: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               >
-                <option>Greater Accra</option>
-                <option>Ashanti</option>
-                <option>Northern</option>
-                <option>Volta</option>
+                {GHANA_REGIONS.map((region) => <option key={region}>{region}</option>)}
               </select>
             </label>
+            </section>
 
-            <label>
-              Location*:
+            <section className="geosense-farm-editor-group">
+            <div className="geosense-farm-editor-section">
+              <span>02</span><div><h3>Location & size</h3><p>Set a map point and describe the site.</p></div>
+            </div>
+
+            <label className="geosense-farm-location-field">
+              Farm location
               <div
+                className="geosense-farm-location-value"
                 style={{
-                  padding: 8,
-                  border: "1px solid #ccc",
-                  borderRadius: 5,
-                  backgroundColor: "#f9f9f9",
-                  marginBottom: 8,
+                  padding: "11px 12px",
+                  border: "1px solid #d5ddd5",
+                  borderRadius: 6,
+                  backgroundColor: "#f1f5f1",
+                  marginBottom: 0,
+                  color: "#4b5d4b",
+                  fontSize: 14,
                 }}
               >
                 {newFarm.location
@@ -1218,180 +1512,197 @@ const SoilMap = () => {
                   );
                 }}
                 style={{
-                  marginBottom: 10,
-                  padding: "6px 12px",
-                  backgroundColor: "#27ae60",
-                  color: "white",
-                  border: "none",
+                  marginTop: 8,
+                  padding: "9px 12px",
+                  backgroundColor: "#e8f3e9",
+                  color: "#17603a",
+                  border: "1px solid #b9d6be",
                   borderRadius: 4,
                   cursor: "pointer",
                 }}
               >
-                Use Current Location
+                {newFarm.location ? "Refresh current location" : "Use current location"}
               </button>
             </label>
 
             <label>
-              Location Description:
+              Location description
               <input
                 type="text"
                 value={newFarm.locationDescription}
                 onChange={(e) => setNewFarm({ ...newFarm, locationDescription: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Land Size (e.g., 5 ha):
+              Land size
               <input
                 type="text"
                 value={newFarm.landSize}
                 onChange={(e) => setNewFarm({ ...newFarm, landSize: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                placeholder="e.g. 5 ha"
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
+            </section>
+
+            <section className="geosense-farm-editor-group">
+            <div className="geosense-farm-editor-section">
+              <span>03</span><div><h3>Soil profile</h3><p>Add soil test values and the latest condition.</p></div>
+            </div>
 
             <label>
-              Soil Type:
+              Soil type
               <input
                 type="text"
                 value={newFarm.soilType}
                 onChange={(e) => setNewFarm({ ...newFarm, soilType: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              pH:
+              Soil pH
               <input
                 type="number"
                 step="0.1"
                 value={newFarm.pH}
                 onChange={(e) => setNewFarm({ ...newFarm, pH: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Moisture (%):
+              Moisture (%)
               <input
                 type="number"
                 value={newFarm.moisture}
                 onChange={(e) => setNewFarm({ ...newFarm, moisture: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Nitrogen (N):
+              Nitrogen (N)
               <input
                 type="number"
                 value={newFarm.N}
                 onChange={(e) => setNewFarm({ ...newFarm, N: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Phosphorus (P):
+              Phosphorus (P)
               <input
                 type="number"
                 value={newFarm.P}
                 onChange={(e) => setNewFarm({ ...newFarm, P: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Potassium (K):
+              Potassium (K)
               <input
                 type="number"
                 value={newFarm.K}
                 onChange={(e) => setNewFarm({ ...newFarm, K: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Organic Matter (%):
+              Organic matter (%)
               <input
                 type="number"
                 step="0.1"
                 value={newFarm.organicMatter}
                 onChange={(e) => setNewFarm({ ...newFarm, organicMatter: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Health Status:
+              Soil health status
               <input
                 type="text"
                 value={newFarm.healthStatus}
                 onChange={(e) => setNewFarm({ ...newFarm, healthStatus: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
+            </section>
+
+            <section className="geosense-farm-editor-group">
+            <div className="geosense-farm-editor-section">
+              <span>04</span><div><h3>Farm activity</h3><p>Record crops, animals, aquatic production, or photos.</p></div>
+            </div>
 
             <label>
-              Suitable Crops (comma separated):
+              Suitable crops
               <input
                 type="text"
                 value={newFarm.suitableCrops}
                 onChange={(e) => setNewFarm({ ...newFarm, suitableCrops: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                placeholder="Separate crop names with commas"
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Livestock:
+              Livestock
               <input
                 type="text"
                 value={newFarm.livestock}
                 onChange={(e) => setNewFarm({ ...newFarm, livestock: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                placeholder="Optional"
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
             <label>
-              Aquatic:
+              Aquatic
               <input
                 type="text"
                 value={newFarm.aquatic}
                 onChange={(e) => setNewFarm({ ...newFarm, aquatic: e.target.value })}
-                style={{ width: "100%", marginBottom: 10, padding: 6, borderRadius: 4, border: "1px solid #ccc" }}
+                placeholder="Optional"
+                style={{ width: "100%", marginBottom: 0, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5cb" }}
               />
             </label>
 
-            <label>
-              Upload Images:
-              <input type="file" multiple accept="image/*" onChange={handleImageUpload} />
+            <label className="geosense-farm-photo-field">
+              Farm photos
+              <input className="geosense-farm-file" type="file" multiple accept="image/*" onChange={handleImageUpload} />
             </label>
+            </section>
 
-            <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
+            <div className="geosense-farm-editor-actions">
               <button
                 type="submit"
                 style={{
-                  backgroundColor: "#27ae60",
+                  backgroundColor: "#17603a",
                   color: "white",
                   border: "none",
-                  borderRadius: 4,
-                  padding: "8px 16px",
+                  borderRadius: 6,
+                  padding: "11px 16px",
                   cursor: "pointer",
                   flexGrow: 1,
                 }}
               >
-                Save Farm
+                {editingFarmId ? "Update Farm" : soilPrefillPending ? "Save Farm & Soil Results" : "Save Farm"}
               </button>
               <button
                 type="button"
-                onClick={() => setShowAddDialog(false)}
+                onClick={() => { setShowAddDialog(false); setEditingFarmId(null); setFarmError(""); }}
                 style={{
-                  backgroundColor: "#aaa",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 4,
-                  padding: "8px 16px",
+                  backgroundColor: "white",
+                  color: "#4b5d4b",
+                  border: "1px solid #cbd5cb",
+                  borderRadius: 6,
+                  padding: "11px 16px",
                   cursor: "pointer",
                   flexGrow: 1,
                 }}
@@ -1402,8 +1713,41 @@ const SoilMap = () => {
           </form>
         </div>
       )}
+
+      {savedFarm && (
+        <div role="presentation" style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, background: "rgba(0,0,0,0.45)" }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="farm-saved-title" className="w-full max-w-md rounded-lg border border-green-200 bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-100 text-lg text-green-800">✓</span>
+              <div>
+                <h2 id="farm-saved-title" className="text-lg font-semibold text-gray-950">Farm added successfully</h2>
+                <p className="mt-1 text-sm text-gray-700"><strong>{savedFarm.farmName}</strong> is saved to your account and now appears in the Farm List.</p>
+                {savedFarm.latestSoilTest && <p className="mt-2 text-sm text-green-800">The latest soil-test results are attached to this farm.</p>}
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setSavedFarm(null)} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Close</button>
+              <button type="button" onClick={() => { setSavedFarm(null); document.getElementById("farm-list")?.scrollIntoView({ behavior: "smooth", block: "start" }); }} className="rounded-md bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800">View in Farm List</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 };
+
+const FarmMetric = ({ label, value }) => (
+  <div className="min-w-0 rounded-md border border-gray-200 bg-white p-3 sm:p-4">
+    <p className="text-xs font-medium text-gray-500">{label}</p>
+    <p className="mt-1 truncate text-base font-semibold text-gray-950 sm:text-lg">{value}</p>
+  </div>
+);
+
+const Detail = ({ label, value }) => (
+  <div className="flex flex-col gap-0.5 border-b border-gray-100 pb-2 last:border-0 last:pb-0 sm:flex-row sm:justify-between sm:gap-4">
+    <span className="text-xs font-medium text-gray-500">{label}</span>
+    <span className="break-words text-sm text-gray-900 sm:max-w-[65%] sm:text-right">{value}</span>
+  </div>
+);
 
 export default SoilMap;

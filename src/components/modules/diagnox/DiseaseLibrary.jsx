@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useAuth } from '../../../contexts/AuthContext';
+import { api } from '../../../lib/api';
 
 // Mock disease data
 const diseasesData = [
@@ -162,12 +164,44 @@ const diseasesData = [
 ];
 
 const DiseaseLibrary = () => {
+  const { currentUser } = useAuth();
   const [searchParams, setSearchParams] = useState({
     searchText: '',
     cropType: '',
     severityLevel: 'all'
   });
+  const [diseases, setDiseases] = useState([]);
   const [selectedDisease, setSelectedDisease] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [libraryError, setLibraryError] = useState('');
+  const [showDiseaseForm, setShowDiseaseForm] = useState(false);
+  const [savingDisease, setSavingDisease] = useState(false);
+  const [diseaseImage, setDiseaseImage] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [diseaseForm, setDiseaseForm] = useState({
+    name: '', scientificName: '', crops: '', affectedParts: '', severity: 'Moderate',
+    description: '', symptoms: '', causes: '', treatments: '', preventionTips: '',
+  });
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api.diseases({
+      search: searchParams.searchText,
+      crop: searchParams.cropType,
+      severity: searchParams.severityLevel === 'all' ? '' : searchParams.severityLevel,
+    }).then((records) => {
+      if (!active) return;
+      setDiseases(records);
+      if (selectedDisease) setSelectedDisease(records.find((record) => record.id === selectedDisease.id) || null);
+      setLibraryError('');
+    }).catch((error) => {
+      if (active) setLibraryError(error.message || 'Could not load the disease library.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [searchParams, refreshKey]);
 
   const handleSearchChange = (e) => {
     const { name, value } = e.target;
@@ -177,20 +211,37 @@ const DiseaseLibrary = () => {
     });
   };
 
-  // Filter diseases based on search parameters
-  const filteredDiseases = diseasesData.filter(disease => {
-    const matchesSearchText = searchParams.searchText === '' || 
-      disease.name.toLowerCase().includes(searchParams.searchText.toLowerCase()) ||
-      disease.scientificName.toLowerCase().includes(searchParams.searchText.toLowerCase());
-      
-    const matchesCropType = searchParams.cropType === '' || 
-      disease.crops.some(crop => crop.toLowerCase().includes(searchParams.cropType.toLowerCase()));
-      
-    const matchesSeverity = searchParams.severityLevel === 'all' || 
-      disease.severity.toLowerCase() === searchParams.severityLevel.toLowerCase();
-      
-    return matchesSearchText && matchesCropType && matchesSeverity;
-  });
+  const filteredDiseases = diseases;
+
+  const handleDiseaseFormChange = (event) => {
+    const { name, value } = event.target;
+    setDiseaseForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleCreateDisease = async (event) => {
+    event.preventDefault();
+    if (!diseaseImage) {
+      setLibraryError('Choose an image for the disease entry.');
+      return;
+    }
+    setSavingDisease(true);
+    setLibraryError('');
+    const listFields = ['crops', 'affectedParts', 'symptoms', 'causes', 'treatments', 'preventionTips'];
+    const disease = { ...diseaseForm };
+    listFields.forEach((field) => { disease[field] = diseaseForm[field].split(/[,\n]/).map((item) => item.trim()).filter(Boolean); });
+    try {
+      const created = await api.createDisease(disease, diseaseImage);
+      setSelectedDisease(created);
+      setDiseaseForm({ name: '', scientificName: '', crops: '', affectedParts: '', severity: 'Moderate', description: '', symptoms: '', causes: '', treatments: '', preventionTips: '' });
+      setDiseaseImage(null);
+      setShowDiseaseForm(false);
+      setRefreshKey((key) => key + 1);
+    } catch (error) {
+      setLibraryError(error.message || 'Could not save disease entry.');
+    } finally {
+      setSavingDisease(false);
+    }
+  };
 
   return (
     <div>
@@ -200,6 +251,55 @@ const DiseaseLibrary = () => {
           Comprehensive database of crop diseases with detailed information on symptoms, causes, treatments, and prevention.
         </p>
       </div>
+
+      {currentUser?.role === 'admin' && (
+        <div className="mb-5">
+          <button type="button" onClick={() => { setShowDiseaseForm((open) => !open); setLibraryError(''); }} className="rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700">
+            {showDiseaseForm ? 'Cancel' : 'Add disease'}
+          </button>
+          {showDiseaseForm && (
+            <form onSubmit={handleCreateDisease} className="mt-4 grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-gray-50 p-5 md:grid-cols-2">
+              <h3 className="md:col-span-2 text-base font-semibold text-gray-900">New disease entry</h3>
+              {[
+                ['name', 'Disease name', 'text'], ['scientificName', 'Scientific name', 'text'], ['crops', 'Affected crops (comma separated)', 'text'],
+                ['affectedParts', 'Affected plant parts (comma separated)', 'text'],
+              ].map(([name, label, type]) => (
+                <label key={name} className="block text-sm font-medium text-gray-700">
+                  {label}
+                  <input name={name} type={type} required={name !== 'affectedParts'} value={diseaseForm[name]} onChange={handleDiseaseFormChange} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+                </label>
+              ))}
+              <label className="block text-sm font-medium text-gray-700">
+                Severity
+                <select name="severity" value={diseaseForm.severity} onChange={handleDiseaseFormChange} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-normal">
+                  <option>Low</option><option>Moderate</option><option>High</option><option>Severe</option>
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-gray-700">
+                Disease image (PNG, JPG, WebP up to 5MB)
+                <input type="file" accept="image/png,image/jpeg,image/webp" required onChange={(event) => setDiseaseImage(event.target.files?.[0] || null)} className="mt-1 block w-full text-sm font-normal" />
+              </label>
+              <label className="block text-sm font-medium text-gray-700 md:col-span-2">
+                Description
+                <textarea name="description" required rows="2" value={diseaseForm.description} onChange={handleDiseaseFormChange} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+              </label>
+              {[
+                ['symptoms', 'Symptoms'], ['causes', 'Causes'], ['treatments', 'Treatments'], ['preventionTips', 'Prevention tips'],
+              ].map(([name, label]) => (
+                <label key={name} className="block text-sm font-medium text-gray-700">
+                  {label} (one per line)
+                  <textarea name={name} required={name === 'symptoms' || name === 'treatments'} rows="3" value={diseaseForm[name]} onChange={handleDiseaseFormChange} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+                </label>
+              ))}
+              <button type="submit" disabled={savingDisease} className="rounded-md bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50 md:col-span-2">
+                {savingDisease ? 'Saving...' : 'Save disease'}
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {libraryError && <p role="alert" className="mb-4 text-sm text-red-700">{libraryError}</p>}
       
       {/* Search and Filter */}
       <div className="bg-white border border-gray-200 rounded-lg shadow p-4 mb-6">
@@ -267,10 +367,10 @@ const DiseaseLibrary = () => {
           <div className="bg-white border border-gray-200 rounded-lg shadow overflow-hidden">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
               <h3 className="text-md font-medium text-gray-900">Disease List</h3>
-              <span className="text-sm text-gray-600">{filteredDiseases.length} results</span>
+              <span className="text-sm text-gray-600">{loading ? 'Loading...' : `${filteredDiseases.length} results`}</span>
             </div>
             <div className="overflow-y-auto max-h-[600px]">
-              {filteredDiseases.length > 0 ? (
+              {loading ? <p className="p-6 text-center text-sm text-gray-500">Loading disease records...</p> : filteredDiseases.length > 0 ? (
                 <ul className="divide-y divide-gray-200">
                   {filteredDiseases.map(disease => (
                     <li key={disease.id}>

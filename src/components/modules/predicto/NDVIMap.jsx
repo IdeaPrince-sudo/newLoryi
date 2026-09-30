@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
+import { api } from '../../../lib/api';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -142,9 +143,14 @@ const allRegionsNdvi = [
   },
 ];
 
-export default function NDVIMap() {
+export default function NDVIMap({ selectedLocation }) {
   const mapContainerRef = useRef(null);
   const [map, setMap] = useState(null);
+  const [monitoring, setMonitoring] = useState(null);
+
+  useEffect(() => {
+    api.monitoring(selectedLocation || 'Greater Accra').then(setMonitoring).catch(() => setMonitoring(null));
+  }, [selectedLocation]);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN) {
@@ -191,6 +197,7 @@ export default function NDVIMap() {
       <h2 className="text-2xl font-semibold mb-4 flex items-center gap-2">
         🛰️ Vegetation Health (NDVI) Map - All Regions of Ghana
       </h2>
+      {monitoring?.selected && <p className="mb-4 text-sm text-gray-700">Live {monitoring.selected.name} vegetation proxy: <strong>{monitoring.selected.ndvi}</strong>. {monitoring.selected.ndviSource}.</p>}
       <div
         ref={mapContainerRef}
         style={{ height: "520px", borderRadius: "8px", border: "1px solid #ccc" }}

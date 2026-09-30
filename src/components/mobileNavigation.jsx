@@ -1,8 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { getSidebarItems } from '../data/modules';
 
 const MobileNavigation = () => {
   const location = useLocation();
   const currentPath = location.pathname;
+  const { currentUser } = useAuth();
 
   const isActive = (path) => {
     if (path === '/' && currentPath === '/') return true;
@@ -10,58 +13,31 @@ const MobileNavigation = () => {
     return false;
   };
 
+  const menuItems = [
+    { key: 'home', name: 'Home', path: '/', module: null, icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v4a1 1 0 011-1h2a1 1 0 011 1v4m-6 0h6' },
+    ...getSidebarItems(currentUser)
+      .flatMap((section) => section.items)
+      .filter((item) => item.path !== '/')
+      .map((item) => ({ ...item, module: item.module })),
+    { key: 'account', name: 'Account', path: '/account', module: null, icon: 'M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0' },
+  ];
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-50 md:hidden">
-      <div className="flex justify-around">
-        <Link 
-          to="/" 
-          className={`flex flex-col items-center py-2 flex-1 ${isActive('/') ? 'text-green-600' : 'text-gray-600'}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-          </svg>
-          <span className="text-xs mt-1">Home</span>
-        </Link>
-        
-        <Link 
-          to="/diagnox" 
-          className={`flex flex-col items-center py-2 flex-1 ${isActive('/diagnox') ? 'text-green-600' : 'text-gray-600'}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          <span className="text-xs mt-1">Diagnox</span>
-        </Link>
-        
-        <Link 
-          to="/geosense" 
-          className={`flex flex-col items-center py-2 flex-1 ${isActive('/geosense') ? 'text-green-600' : 'text-gray-600'}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
-          </svg>
-          <span className="text-xs mt-1">GeoSense</span>
-        </Link>
-        
-        <Link 
-          to="/predicto" 
-          className={`flex flex-col items-center py-2 flex-1 ${isActive('/predicto') ? 'text-green-600' : 'text-gray-600'}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          <span className="text-xs mt-1">Predicto</span>
-        </Link>
-        
-        <Link 
-          to="/fertiwise" 
-          className={`flex flex-col items-center py-2 flex-1 ${isActive('/fertiwise') ? 'text-green-600' : 'text-gray-600'}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-          </svg>
-          <span className="text-xs mt-1">Fertiwise</span>
-        </Link>
+    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-200 bg-white shadow-lg md:hidden">
+      <div className="flex min-w-max gap-1 overflow-x-auto px-2 py-2">
+        {menuItems.map((item) => (
+          <Link
+            key={item.key}
+            to={item.path}
+            aria-current={isActive(item.path) ? 'page' : undefined}
+            className={`flex min-w-[68px] flex-col items-center rounded-md px-2 py-1.5 ${isActive(item.path) ? 'bg-green-50 text-green-600' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={item.icon} />
+            </svg>
+            <span className="mt-1 max-w-[76px] truncate text-[11px]">{item.name}</span>
+          </Link>
+        ))}
       </div>
     </div>
   );

@@ -9,8 +9,11 @@ import SoilCarbonMonitoring from './SoilCarbonMonitoring';
 import ForestHealthMonitor from './ForestHealthMonitor';
 import WaterScarcity from './WaterScarcity';
 import RainFall from "./rainfall";
+import FarmerFieldAnalysis from './FarmerFieldAnalysis';
+import CarbonCreditRewards from './CarbonCreditRewards';
 
 export default function PredictoDashboard() {
+  const [weatherLocation, setWeatherLocation] = useState({ name: 'Greater Accra' });
   const [activeTabWeather, setActiveTabWeather] = useState("WeatherForecastCard");
   const [activeTabWaterNDVI, setActiveTabWaterNDVI] = useState("WaterScarcity");
   const [activeTabCropSoilForest, setActiveTabCropSoilForest] = useState("CropYieldPrediction");
@@ -18,9 +21,9 @@ export default function PredictoDashboard() {
   const renderWeatherTab = () => {
     switch (activeTabWeather) {
       case "WeatherForecastCard":
-        return <WeatherForecastCard />;
+        return <WeatherForecastCard selectedLocation={weatherLocation} onLocationChange={setWeatherLocation} />;
       case "SmartRemindersPanel":
-        return <SmartRemindersPanel />;
+        return <SmartRemindersPanel location={weatherLocation} />;
       default:
         return null;
     }
@@ -29,11 +32,11 @@ export default function PredictoDashboard() {
   const renderWaterNDVITab = () => {
     switch (activeTabWaterNDVI) {
       case "WaterScarcity":
-        return <WaterScarcity />;
+        return <WaterScarcity selectedLocation={weatherLocation} onLocationChange={setWeatherLocation} />;
         case "RainFall":
-          return <RainFall />;
+          return <RainFall selectedLocation={weatherLocation} />;
       case "NDVIMap":
-        return <NDVIMap />;
+        return <NDVIMap selectedLocation={weatherLocation} />;
       default:
         return null;
     }
@@ -42,11 +45,11 @@ export default function PredictoDashboard() {
   const renderCropSoilForestTab = () => {
     switch (activeTabCropSoilForest) {
       case "CropYieldPrediction":
-        return <CropYieldPrediction />;
+        return <CropYieldPrediction selectedLocation={weatherLocation} onLocationChange={setWeatherLocation} />;
       case "SoilCarbonMonitoring":
-        return <SoilCarbonMonitoring />;
+        return <SoilCarbonMonitoring selectedLocation={weatherLocation} onLocationChange={setWeatherLocation} />;
       case "ForestHealthMonitor":
-        return <ForestHealthMonitor />;
+        return <ForestHealthMonitor selectedLocation={weatherLocation} onLocationChange={setWeatherLocation} />;
       default:
         return null;
     }
@@ -95,6 +98,10 @@ export default function PredictoDashboard() {
 
       {/* Climate Alert Banner */}
       <ClimateAlertBanner />
+
+      <FarmerFieldAnalysis />
+
+      <CarbonCreditRewards selectedLocation={weatherLocation} />
 
       {/* Weather & Smart Reminders Tabs */}
       <div className="bg-white rounded-lg shadow p-4 border border-gray-200">

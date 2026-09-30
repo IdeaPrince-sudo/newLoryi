@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Dashboard from './Dashboard';
 import FertilizerRecommendations from './fertilizer/FertilizerRecommendations';
-import SoilHealthMonitoring from './soil/SoilHealthMonitoring';
+import SoilHealthMonitoring from './soil/SoilHealthMonitoringLive';
 import SupplierMapping from './mapping/SupplierMapping';
 import CostBenefitCalculator from './calculator/CostBenefitCalculator';
 import FertilizerTracker from './tracker/FertilizerTracker';
@@ -13,17 +13,17 @@ import ExpertConsultation from './expert/ExpertConsultation';
 const FertiWise = () => {
   const { currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [calculatorSection, setCalculatorSection] = useState('calculator');
+  const [supportSection, setSupportSection] = useState('feedback');
 
   const tabs = [
     { id: 'dashboard', name: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M13 5v6h6m-6 0v6h6' },
     { id: 'recommendations', name: 'Recommendations', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
     { id: 'soil-health', name: 'Soil', icon: 'M12 8c-1.1 0-2 .9-2 2v4h4v-4c0-1.1-.9-2-2-2z' },
     { id: 'supplier-mapping', name: 'Suppliers', icon: 'M3 7l9 4 9-4-9-4-9 4zm0 6l9 4 9-4' },
-    { id: 'calculator', name: 'Calculator', icon: 'M7 7h10M7 11h10M7 15h10M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
-    { id: 'tracker', name: 'Tracker', icon: 'M9 17v-2m3 2v-4m3 4v-6M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z' },
-    { id: 'feedback', name: 'Feedback', icon: 'M7 8h10M7 12h6m-6 4h4m6 0h2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12l4-4h10a2 2 0 012 2z' },
+    { id: 'calculator-tracker', name: 'Calculator & Tracker', icon: 'M7 7h10M7 11h10M7 15h10M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
+    { id: 'community-support', name: 'Community & Experts', icon: 'M7 8h10M7 12h6m-6 4h4m6 0h2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12l4-4h10a2 2 0 012 2z' },
     { id: 'subsidies', name: 'Programs', icon: 'M4 6h16M4 10h16M4 14h16M4 18h16' },
-    { id: 'expert', name: 'Experts', icon: 'M12 12c2.28 0 4-1.72 4-4s-1.72-4-4-4-4 1.72-4 4 1.72 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z' },
   ];
 
   return (
@@ -86,11 +86,37 @@ const FertiWise = () => {
         {activeTab === 'recommendations' && <FertilizerRecommendations />}
         {activeTab === 'soil-health' && <SoilHealthMonitoring />}
         {activeTab === 'supplier-mapping' && <SupplierMapping />}
-        {activeTab === 'calculator' && <CostBenefitCalculator />}
-        {activeTab === 'tracker' && <FertilizerTracker />}
-        {activeTab === 'feedback' && <FarmerFeedback />}
+        {activeTab === 'calculator-tracker' && (
+          <div className="space-y-5">
+            <div className="flex justify-start">
+              <div className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-1" role="tablist" aria-label="Calculator and tracker tools">
+                <button type="button" role="tab" aria-selected={calculatorSection === 'calculator'} onClick={() => setCalculatorSection('calculator')} className={`rounded px-4 py-2 text-sm font-medium transition-colors ${calculatorSection === 'calculator' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}>
+                  Cost-Benefit Calculator
+                </button>
+                <button type="button" role="tab" aria-selected={calculatorSection === 'tracker'} onClick={() => setCalculatorSection('tracker')} className={`rounded px-4 py-2 text-sm font-medium transition-colors ${calculatorSection === 'tracker' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}>
+                  Fertilizer Tracker
+                </button>
+              </div>
+            </div>
+            {calculatorSection === 'calculator' ? <CostBenefitCalculator /> : <FertilizerTracker />}
+          </div>
+        )}
+        {activeTab === 'community-support' && (
+          <div className="space-y-5">
+            <div className="flex justify-start">
+              <div className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-1" role="tablist" aria-label="Community and expert tools">
+                <button type="button" role="tab" aria-selected={supportSection === 'feedback'} onClick={() => setSupportSection('feedback')} className={`rounded px-4 py-2 text-sm font-medium transition-colors ${supportSection === 'feedback' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}>
+                  Farmer Community & Feedback
+                </button>
+                <button type="button" role="tab" aria-selected={supportSection === 'expert'} onClick={() => setSupportSection('expert')} className={`rounded px-4 py-2 text-sm font-medium transition-colors ${supportSection === 'expert' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}>
+                  Expert Consultation
+                </button>
+              </div>
+            </div>
+            {supportSection === 'feedback' ? <FarmerFeedback /> : <ExpertConsultation />}
+          </div>
+        )}
         {activeTab === 'subsidies' && <SubsidyPrograms />}
-        {activeTab === 'expert' && <ExpertConsultation/> }
       </div>
     </div>
   );

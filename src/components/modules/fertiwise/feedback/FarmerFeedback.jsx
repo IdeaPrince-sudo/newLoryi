@@ -1,5 +1,13 @@
-import React, { useState } from 'react';
-import { fertilizerRecommendations, expertAdvice } from '../fertiWiseData';
+import React, { useEffect, useState } from 'react';
+import { api } from '../../../../lib/api';
+
+const normalizeDiscussion = (post) => ({
+  ...post,
+  title: post.title || 'Community discussion',
+  tags: Array.isArray(post.tags) ? post.tags : [],
+  replies: Array.isArray(post.replies) ? post.replies : [],
+  date: post.createdAt || post.date,
+});
 
 const FarmerFeedback = () => {
   const [activeTab, setActiveTab] = useState('discussion');
@@ -10,73 +18,40 @@ const FarmerFeedback = () => {
     tags: ''
   });
   const [showNewPostForm, setShowNewPostForm] = useState(false);
+  const [discussions, setDiscussions] = useState([]);
+  const [loadingDiscussions, setLoadingDiscussions] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [replyDrafts, setReplyDrafts] = useState({});
+  const [replyingTo, setReplyingTo] = useState('');
+  const [forumError, setForumError] = useState('');
+  const [forumNotice, setForumNotice] = useState('');
+  const recentExpertReplies = discussions
+    .flatMap((discussion) => discussion.replies
+      .filter((reply) => ['agronomist', 'admin'].includes(String(reply.role || '').toLowerCase()))
+      .map((reply) => ({
+        id: reply.id,
+        question: discussion.title,
+        answer: reply.content,
+        date: reply.createdAt || reply.date,
+        expert: reply.author,
+        expertise: reply.role,
+      })))
+    .sort((first, second) => new Date(second.date || 0) - new Date(first.date || 0));
 
-  // Mock forum discussions
-  const [discussions, setDiscussions] = useState([
-    {
-      id: 1,
-      title: 'Best practices for NPK application in rice fields?',
-      author: 'farmer_john',
-      date: '2025-07-12',
-      content: 'I\'ve been using NPK 15-15-15 for my rice fields but I\'m not seeing the expected results. Has anyone tried different ratios with better success?',
-      tags: ['NPK', 'Rice', 'Application Methods'],
-      replies: [
-        {
-          id: 1,
-          author: 'rice_expert',
-          date: '2025-07-13',
-          content: 'For rice, I\'ve had better results with NPK 14-14-14 applied in split doses. Try applying 40% before planting, 30% during active tillering, and 30% at panicle initiation stage.'
-        },
-        {
-          id: 2,
-          author: 'agro_scientist',
-          date: '2025-07-14',
-          content: 'Soil testing is crucial before selecting your NPK ratio. Rice typically needs higher nitrogen during vegetative growth and more potassium during grain filling. Consider a soil test and adjust accordingly.'
-        }
-      ],
-      likes: 12
-    },
-    {
-      id: 2,
-      title: 'Counterfeit fertilizer warning in Eastern Region',
-      author: 'vigilant_farmer',
-      date: '2025-07-10',
-      content: 'I recently purchased what claimed to be premium urea from a new supplier in the Eastern market. After application, my crops showed signs of nutrient deficiency. Laboratory testing confirmed it contained only 22% nitrogen instead of the claimed 46%. Be cautious when buying from unlisted suppliers!',
-      tags: ['Counterfeit', 'Warning', 'Urea'],
-      replies: [
-        {
-          id: 1,
-          author: 'extension_officer',
-          date: '2025-07-11',
-          content: 'Thank you for sharing this alert. Could you provide details about the packaging and branding so others can avoid it? We\'ve recorded similar cases in neighboring regions recently.'
-        }
-      ],
-      likes: 28
-    },
-    {
-      id: 3,
-      title: 'Success with bio-fertilizers in vegetable farming',
-      author: 'organic_grower',
-      date: '2025-07-05',
-      content: 'I\'ve been experimenting with bio-fertilizers containing Azotobacter and Phosphobacteria for my vegetable plots. After six months, I\'ve seen a 15% increase in yield while reducing chemical fertilizer usage by 30%. Has anyone else had similar experiences?',
-      tags: ['Bio-fertilizer', 'Organic', 'Vegetables'],
-      replies: [
-        {
-          id: 1,
-          author: 'sustainable_ag',
-          date: '2025-07-06',
-          content: 'Yes, I\'ve had similar results with tomatoes and peppers. Which brand are you using? I found that combining bio-fertilizers with vermicompost gives even better results.'
-        },
-        {
-          id: 2,
-          author: 'soil_scientist',
-          date: '2025-07-07',
-          content: 'Bio-fertilizers work best in soils with good organic matter content. They enhance nutrient cycling and improve soil health over time. I recommend continuing with a mixed approach rather than fully replacing chemical fertilizers until your soil biology is well-established.'
-        }
-      ],
-      likes: 19
+  const loadDiscussions = async () => {
+    setLoadingDiscussions(true);
+    setForumError('');
+    try {
+      const posts = await api.posts();
+      setDiscussions(posts.map(normalizeDiscussion));
+    } catch (requestError) {
+      setForumError(requestError.message || 'Community discussions could not be loaded.');
+    } finally {
+      setLoadingDiscussions(false);
     }
-  ]);
+  };
+
+  useEffect(() => { loadDiscussions(); }, []);
 
   // Mock frequently asked questions
   const faqs = [
@@ -103,31 +78,68 @@ const FarmerFeedback = () => {
   ];
 
   // Handle new discussion submission
-  const handleNewDiscussionSubmit = (e) => {
+  const handleNewDiscussionSubmit = async (e) => {
     e.preventDefault();
-    
-    // In a real app, this would be sent to a server
-    const newPost = {
-      id: discussions.length + 1,
-      title: newDiscussion.title,
-      author: 'current_user',
-      date: new Date().toISOString().split('T')[0],
-      content: newDiscussion.content,
-      tags: newDiscussion.tags.split(',').map(tag => tag.trim()),
-      replies: [],
-      likes: 0
-    };
-    
-    setDiscussions([newPost, ...discussions]);
-    setShowNewPostForm(false);
-    setNewDiscussion({ title: '', content: '', tags: '' });
+    setSubmitting(true);
+    setForumError('');
+    setForumNotice('');
+    try {
+      const post = await api.createPost({
+        title: newDiscussion.title,
+        content: newDiscussion.content,
+        tags: newDiscussion.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      });
+      setDiscussions((current) => [normalizeDiscussion(post), ...current]);
+      setShowNewPostForm(false);
+      setNewDiscussion({ title: '', content: '', tags: '' });
+      setForumNotice('Your discussion has been posted.');
+    } catch (requestError) {
+      setForumError(requestError.message || 'Your discussion could not be posted.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  // Handle new question submission
-  const handleNewQuestionSubmit = (e) => {
+  const handleNewQuestionSubmit = async (e) => {
     e.preventDefault();
-    alert('Thank you for your question! An expert will respond to you shortly.');
-    setNewQuestion('');
+    setSubmitting(true);
+    setForumError('');
+    setForumNotice('');
+    try {
+      const post = await api.createPost({ title: 'Question for an expert', content: newQuestion, tags: ['Ask an Expert', 'FertiWise'] });
+      setDiscussions((current) => [normalizeDiscussion(post), ...current]);
+      setNewQuestion('');
+      setForumNotice('Your question is posted for the community and agricultural experts to respond to.');
+    } catch (requestError) {
+      setForumError(requestError.message || 'Your question could not be submitted.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReply = async (postId) => {
+    const content = String(replyDrafts[postId] || '').trim();
+    if (!content) return;
+    setReplyingTo(postId);
+    setForumError('');
+    try {
+      const result = await api.replyToPost(postId, content);
+      setDiscussions((current) => current.map((post) => String(post.id) === String(postId) ? normalizeDiscussion(result.post) : post));
+      setReplyDrafts((current) => ({ ...current, [postId]: '' }));
+    } catch (requestError) {
+      setForumError(requestError.message || 'Your reply could not be posted.');
+    } finally {
+      setReplyingTo('');
+    }
+  };
+
+  const handleLike = async (postId) => {
+    try {
+      const updatedPost = await api.likePost(postId);
+      setDiscussions((current) => current.map((post) => String(post.id) === String(postId) ? normalizeDiscussion(updatedPost) : post));
+    } catch (requestError) {
+      setForumError(requestError.message || 'The discussion could not be liked.');
+    }
   };
 
   // Format date for display
@@ -177,12 +189,14 @@ const FarmerFeedback = () => {
         </div>
         
         <div className="p-6">
+          {forumError && <p role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">{forumError}</p>}
+          {forumNotice && <p role="status" className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-800">{forumNotice}</p>}
           {activeTab === 'discussion' && (
             <div>
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-lg font-medium text-gray-800">Farmer Discussion Forum</h2>
                 <button
-                  onClick={() => setShowNewPostForm(!showNewPostForm)}
+                  onClick={() => { setShowNewPostForm(!showNewPostForm); setForumError(''); setForumNotice(''); }}
                   className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
                 >
                   {showNewPostForm ? 'Cancel' : 'Start New Discussion'}
@@ -199,6 +213,7 @@ const FarmerFeedback = () => {
                       <input
                         type="text"
                         required
+                        maxLength={160}
                         value={newDiscussion.title}
                         onChange={(e) => setNewDiscussion({ ...newDiscussion, title: e.target.value })}
                         className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
@@ -210,6 +225,7 @@ const FarmerFeedback = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Content</label>
                       <textarea
                         required
+                        maxLength={5000}
                         value={newDiscussion.content}
                         onChange={(e) => setNewDiscussion({ ...newDiscussion, content: e.target.value })}
                         rows={4}
@@ -222,6 +238,7 @@ const FarmerFeedback = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Tags (comma separated)</label>
                       <input
                         type="text"
+                        maxLength={160}
                         value={newDiscussion.tags}
                         onChange={(e) => setNewDiscussion({ ...newDiscussion, tags: e.target.value })}
                         className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
@@ -232,22 +249,23 @@ const FarmerFeedback = () => {
                     <div className="flex justify-end">
                       <button
                         type="submit"
+                        disabled={submitting}
                         className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
                       >
-                        Post Discussion
+                        {submitting ? 'Posting…' : 'Post Discussion'}
                       </button>
                     </div>
                   </form>
                 </div>
               )}
               
-              <div className="space-y-6">
+              {loadingDiscussions ? <p role="status" className="rounded-md bg-gray-50 p-8 text-center text-sm text-gray-600">Loading community discussions…</p> : discussions.length === 0 ? <div className="rounded-md border border-gray-200 bg-gray-50 p-8 text-center"><h3 className="font-medium text-gray-900">No discussions yet</h3><p className="mt-1 text-sm text-gray-600">Start a discussion to ask farmers and agronomists for advice.</p></div> : <div className="space-y-6">
                 {discussions.map(discussion => (
                   <div key={discussion.id} className="border border-gray-200 rounded-md overflow-hidden">
                     <div className="bg-gray-50 p-4">
                       <h3 className="text-lg font-medium text-gray-800">{discussion.title}</h3>
                       <div className="flex items-center text-sm text-gray-500 mt-1">
-                        <span>Posted by {discussion.author}</span>
+                        <span>Posted by {discussion.author}{discussion.role ? ` · ${discussion.role}` : ''}</span>
                         <span className="mx-2">•</span>
                         <span>{formatDate(discussion.date)}</span>
                       </div>
@@ -265,7 +283,7 @@ const FarmerFeedback = () => {
                       </div>
                       
                       <div className="mt-4 flex items-center text-sm">
-                        <button className="flex items-center text-gray-500 hover:text-green-600">
+                        <button type="button" onClick={() => handleLike(discussion.id)} className="flex items-center text-gray-500 hover:text-green-600" aria-label={`Like discussion, ${discussion.likes || 0} likes`}>
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
                           </svg>
@@ -276,10 +294,9 @@ const FarmerFeedback = () => {
                       </div>
                     </div>
                     
-                    {discussion.replies.length > 0 && (
-                      <div className="bg-gray-50 p-4 border-t border-gray-200">
+                    <div className="bg-gray-50 p-4 border-t border-gray-200">
                         <h4 className="text-sm font-medium text-gray-700 mb-3">Replies</h4>
-                        <div className="space-y-4">
+                        {discussion.replies.length > 0 && <div className="space-y-4">
                           {discussion.replies.map(reply => (
                             <div key={reply.id} className="bg-white p-3 rounded-md border border-gray-200">
                               <div className="flex justify-between items-start">
@@ -289,30 +306,32 @@ const FarmerFeedback = () => {
                                   </div>
                                   <span className="ml-2 text-sm font-medium">{reply.author}</span>
                                 </div>
-                                <span className="text-xs text-gray-500">{formatDate(reply.date)}</span>
+                                <span className="text-xs text-gray-500">{formatDate(reply.createdAt || reply.date)}</span>
                               </div>
                               <p className="text-sm text-gray-700 mt-2">{reply.content}</p>
                             </div>
                           ))}
-                        </div>
+                        </div>}
                         
                         <div className="mt-4">
                           <textarea
                             placeholder="Write a reply..."
+                            value={replyDrafts[discussion.id] || ''}
+                            onChange={(event) => setReplyDrafts((current) => ({ ...current, [discussion.id]: event.target.value }))}
                             className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                             rows={2}
+                            maxLength={2000}
                           ></textarea>
                           <div className="mt-2 flex justify-end">
-                            <button className="px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors">
-                              Reply
+                            <button type="button" onClick={() => handleReply(discussion.id)} disabled={replyingTo === discussion.id || !String(replyDrafts[discussion.id] || '').trim()} className="px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+                              {replyingTo === discussion.id ? 'Sending…' : 'Reply'}
                             </button>
                           </div>
                         </div>
                       </div>
-                    )}
                   </div>
                 ))}
-              </div>
+              </div>}
             </div>
           )}
           
@@ -337,6 +356,7 @@ const FarmerFeedback = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Your Question</label>
                     <textarea
                       required
+                        maxLength={5000}
                       value={newQuestion}
                       onChange={(e) => setNewQuestion(e.target.value)}
                       rows={4}
@@ -348,9 +368,10 @@ const FarmerFeedback = () => {
                   <div className="flex justify-end">
                     <button
                       type="submit"
+                      disabled={submitting}
                       className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
                     >
-                      Submit Question
+                      {submitting ? 'Submitting…' : 'Submit Question'}
                     </button>
                   </div>
                 </form>
@@ -359,12 +380,12 @@ const FarmerFeedback = () => {
               <div>
                 <h3 className="font-medium text-gray-800 mb-4">Recent Expert Advice</h3>
                 
-                <div className="space-y-4">
-                  {expertAdvice.map((advice, index) => (
-                    <div key={index} className="bg-gray-50 p-4 rounded-md">
-                      <div className="flex justify-between">
+                {recentExpertReplies.length ? <div className="space-y-4">
+                  {recentExpertReplies.slice(0, 8).map((advice) => (
+                    <div key={advice.id} className="bg-gray-50 p-4 rounded-md">
+                      <div className="flex flex-wrap justify-between gap-2">
                         <h4 className="font-medium text-gray-800">{advice.question}</h4>
-                        <span className="text-xs text-gray-500">{advice.date}</span>
+                        <span className="text-xs text-gray-500">{formatDate(advice.date)}</span>
                       </div>
                       <p className="text-sm text-gray-600 mt-2">{advice.answer}</p>
                       <div className="mt-2">
@@ -373,7 +394,7 @@ const FarmerFeedback = () => {
                       </div>
                     </div>
                   ))}
-                </div>
+                </div> : <p className="rounded-md bg-gray-50 p-4 text-sm text-gray-600">Agronomist responses to community discussions will appear here.</p>}
               </div>
             </div>
           )}

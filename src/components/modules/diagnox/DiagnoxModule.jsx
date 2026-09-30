@@ -29,7 +29,7 @@ const DiagnoxModule = () => {
             </div>
             <div>
               <h1 className="text-xl font-semibold text-gray-900">DiagnoX</h1>
-              <p className="text-gray-600">AI-powered crop disease & pest identification</p>
+              <p className="text-gray-600">AI-assisted crop diagnosis and livestock health triage</p>
             </div>
           </div>
           <div className="flex items-center">

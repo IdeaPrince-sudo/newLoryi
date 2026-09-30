@@ -1,167 +1,113 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { api } from '../lib/api';
+import moduleRegistry from '../data/modules';
 
-// ✅ Export AuthContext as a named export
+const roleModuleDefaults = {
+  farmer: moduleRegistry
+    .filter((module) => module.module)
+    .map((module) => module.module),
+  agronomist: [
+    'GeoSense',
+    'DiagnoX',
+    'Predicto',
+    'FertiWise',
+    'SeedLin',
+    'Livestock',
+    'Forestry',
+    'Fisheries & Aquaculture',
+    'Terra Q',
+    'CreditTrack',
+  ],
+  admin: moduleRegistry
+    .filter((module) => module.module)
+    .map((module) => module.module),
+  investor: ['SafeVest', 'FarmIQ', 'AgroMart', 'UpdateX', 'AgriTrack', 'CreditTrack'],
+  bank: ['FarmIQ', 'SafeVest', 'AgroMart', 'UpdateX', 'AgriTrack', 'CreditTrack'],
+  store: ['SafeVest', 'AgroMart', 'UpdateX', 'CreditTrack'],
+  buyer: ['SafeVest', 'AgroMart', 'UpdateX', 'CreditTrack'],
+};
+
+const normalizeUser = (user) => {
+  if (!user) return user;
+  const defaultModules = roleModuleDefaults[user.role] || [];
+  const modules = [...new Set([...(Array.isArray(user.modules) ? user.modules : []), ...defaultModules])];
+  return { ...user, modules };
+};
+
 export const AuthContext = createContext();
 
-// Custom hook to use the auth context
-export const useAuth = () => {
-  return useContext(AuthContext);
-};
+export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Mock user data with different roles and access permissions
-  const mockUsers = [
-    {
-      id: '1',
-      email: 'farmer@example.com',
-      password: 'password',
-      name: 'John Farmer',
-      role: 'farmer',
-      credits: 75,
-      modules: [
-        'GeoSense',
-        'FertiWise',
-        'SeedLin',
-        'DiagnoX',
-        'FarmIQ',
-        'Predicto',
-        'Terra Q',
-        'SafeVest',
-        'AgroMart',
-        'UpdateX',
-        'AgriTrack',
-      ],
-    },
-    {
-      id: '2',
-      email: 'agronomist@example.com',
-      password: 'password',
-      name: 'Sara Expert',
-      role: 'agronomist, extension, reseacher',
-      credits: 150,
-      modules: ['GeoSense', 'DiagnoX', 'Predicto', 'FertiWise', 'SeedLin', 'Terra Q'],
-    },
-    {
-      id: '3',
-      email: 'admin@example.com',
-      password: 'password',
-      name: 'Admin User',
-      role: 'admin',
-      credits: 500,
-      modules: [
-        'GeoSense',
-        'FertiWise',
-        'SeedLin',
-        'DiagnoX',
-        'FarmIQ',
-        'Predicto',
-        'Terra Q',
-        'SafeVest',
-        'AgroMart',
-        'UpdateX',
-        'AgriTrack',
-      ],
-    },
-    {
-      id: '4',
-      email: 'investor@example.com',
-      password: 'password',
-      name: 'Justice Akpadie',
-      role: 'investor',
-      credits: 150,
-      modules: ['SafeVest', 'FarmIQ', 'AgroMart', 'UpdateX', 'AgriTrack'],
-    },
-    {
-      id: '5',
-      email: 'provider@example.com',
-      password: 'password',
-      name: 'Justice Akpadie Jnr',
-      role: 'financial, insurance, security',
-      credits: 150,
-      modules: ['SafeVest', 'AgroMart', 'UpdateX'],
-    },
-    {
-      id: '6',
-      email: 'buyer@example.com',
-      password: 'password',
-      name: 'Justice Akpadie Jnr',
-      role: 'buyer',
-      credits: 150,
-      modules: ['SafeVest', 'AgroMart', 'UpdateX'],
-    },
-    {
-      id: '7',
-      email: 'store@example.com',
-      password: 'password',
-      name: 'Justice Akpadie Jnr',
-      role: 'store',
-      credits: 150,
-      modules: ['SafeVest', 'AgroMart', 'UpdateX'],
-    },
-  ];
-
-  // Load user from localStorage on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem('loryiUser');
-    if (storedUser) {
-      try {
-        setCurrentUser(JSON.parse(storedUser));
-      } catch (error) {
-        console.error('Failed to parse stored user:', error);
-        localStorage.removeItem('loryiUser');
-      }
+    const handleSessionExpired = () => {
+      setCurrentUser(null);
+      localStorage.removeItem('loryiToken');
+      localStorage.removeItem('loryiUser');
+    };
+    window.addEventListener('loryi:session-expired', handleSessionExpired);
+
+    if (!localStorage.getItem('loryiToken')) {
+      setLoading(false);
+      return () => window.removeEventListener('loryi:session-expired', handleSessionExpired);
     }
-    setLoading(false);
+
+    api.me()
+      .then((user) => setCurrentUser(normalizeUser(user)))
+      .catch(() => {
+        localStorage.removeItem('loryiToken');
+        localStorage.removeItem('loryiUser');
+      })
+      .finally(() => setLoading(false));
+
+    return () => window.removeEventListener('loryi:session-expired', handleSessionExpired);
   }, []);
 
-  // Login function
-  const login = (email, password) => {
-    const user = mockUsers.find(
-      (u) => u.email === email && u.password === password
-    );
-
-    if (user) {
-      const { password: _, ...userWithoutPassword } = user; // Remove password
-      setCurrentUser(userWithoutPassword);
-      localStorage.setItem('loryiUser', JSON.stringify(userWithoutPassword));
+  const login = async (email, password) => {
+    try {
+      const { token, user } = await api.login(email, password);
+      const normalizedUser = normalizeUser(user);
+      localStorage.setItem('loryiToken', token);
+      localStorage.setItem('loryiUser', JSON.stringify(normalizedUser));
+      setCurrentUser(normalizedUser);
       return true;
+    } catch {
+      return false;
     }
-    return false;
   };
 
-  // Logout function
-  const logout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('loryiUser');
+  const logout = async () => {
+    try {
+      if (localStorage.getItem('loryiToken')) await api.logout();
+    } finally {
+      setCurrentUser(null);
+      localStorage.removeItem('loryiToken');
+      localStorage.removeItem('loryiUser');
+    }
   };
 
-  // Check module access
-  const canAccessModule = (moduleName) => {
-    if (!currentUser) return false;
-    return currentUser.modules.includes(moduleName);
+  const refreshUser = async () => {
+    const user = await api.me();
+    const normalizedUser = normalizeUser(user);
+    setCurrentUser(normalizedUser);
+    localStorage.setItem('loryiUser', JSON.stringify(normalizedUser));
+    return normalizedUser;
   };
 
-  // Update credits (add or deduct)
-  const updateCredits = (amountChange) => {
+  const canAccessModule = (moduleName) => Boolean(
+    currentUser && (currentUser.role === 'admin' || currentUser.modules.includes(moduleName))
+  );
+
+  const updateCredits = async (amountChange) => {
     if (!currentUser) return;
-
-    const newCredits = Math.max(0, currentUser.credits + amountChange);
-
-    const updatedUser = {
-      ...currentUser,
-      credits: newCredits,
-    };
-
-    setCurrentUser(updatedUser);
-    localStorage.setItem('loryiUser', JSON.stringify(updatedUser));
-
-    return newCredits;
+    const result = await api.adjustCredits(amountChange);
+    await refreshUser();
+    return result.balance;
   };
 
-  // Provide context value
   const value = {
     currentUser,
     loading,
@@ -169,6 +115,7 @@ export const AuthProvider = ({ children }) => {
     logout,
     canAccessModule,
     updateCredits,
+    refreshUser,
   };
 
   return (

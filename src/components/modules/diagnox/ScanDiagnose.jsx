@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
+import { jsPDF } from 'jspdf';
+import { api } from '../../../lib/api';
 
 const ScanDiagnose = () => {
+  const [diagnosisMode, setDiagnosisMode] = useState('crop');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState(null);
+  const [scanError, setScanError] = useState('');
+  const [livestockDetails, setLivestockDetails] = useState({ species: '', bodyArea: '' });
   const [searchParams, setSearchParams] = useState({
     cropType: '',
     diseaseName: '',
@@ -12,7 +17,20 @@ const ScanDiagnose = () => {
   });
 
   const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
+    const selectedFile = e.target.files?.[0];
+    e.target.value = '';
+    setScanError('');
+    if (!selectedFile) return;
+    setFile(null);
+    setPreview(null);
+    if (!['image/png', 'image/jpeg'].includes(selectedFile.type)) {
+      setScanError('Choose a PNG or JPG image.');
+      return;
+    }
+    if (selectedFile.size > 5 * 1024 * 1024) {
+      setScanError('Image must be 5MB or smaller.');
+      return;
+    }
     if (selectedFile) {
       setFile(selectedFile);
       const reader = new FileReader();
@@ -23,62 +41,32 @@ const ScanDiagnose = () => {
     }
   };
 
-  const handleScan = () => {
+  const handleScan = async () => {
     if (!file) return;
-    
     setScanning(true);
-    
-    // Simulate API scan process
-    setTimeout(() => {
-      const mockResults = {
-        diseaseName: 'Powdery Mildew',
-        scientificName: 'Erysiphe cichoracearum',
-        confidence: 92.4,
-        severity: 'Moderate',
-        affectedCrops: ['Cucumber', 'Squash', 'Zucchini', 'Pumpkin'],
-        description: 'Powdery mildew is a fungal disease that appears as a white powdery substance on the leaves, stems, and sometimes fruit of infected plants.',
-        symptoms: [
-          'White powdery spots on leaves and stems',
-          'Yellowing of leaves',
-          'Leaf curling and distortion',
-          'Premature leaf drop',
-          'Stunted growth',
-          'Reduced yield'
-        ],
-        causes: [
-          'Fungal spores spread by wind',
-          'Warm days and cool nights',
-          'High humidity but dry leaf surfaces',
-          'Poor air circulation',
-          'Overcrowded plants'
-        ],
-        treatments: [
-          'Remove and destroy infected plant parts',
-          'Apply fungicides containing sulfur or potassium bicarbonate',
-          'Use neem oil or other organic fungicides',
-          'Improve air circulation around plants',
-          'Water at the base of plants, avoiding wetting the foliage'
-        ],
-        preventionTips: [
-          'Plant resistant varieties',
-          'Ensure proper spacing between plants',
-          'Avoid overhead watering',
-          'Rotate crops annually',
-          'Clean garden tools between uses'
-        ],
-        date: new Date().toISOString(),
-        imageUrl: preview
-      };
-      
-      setScanResults(mockResults);
+    setScanError('');
+    try {
+      const result = diagnosisMode === 'livestock'
+        ? await api.analyzeLivestockImage(file, livestockDetails)
+        : await api.analyzeCropImage(file);
+      setScanResults({ ...result, imageUrl: preview });
+    } catch (error) {
+      setScanError(error.message || 'Image analysis failed. Please try again.');
+    } finally {
       setScanning(false);
-    }, 2000);
+    }
   };
 
   const handleClearScan = () => {
     setFile(null);
     setPreview(null);
     setScanResults(null);
+    setScanError('');
+  };
+
+  const changeDiagnosisMode = (mode) => {
+    setDiagnosisMode(mode);
+    handleClearScan();
   };
 
   const handleSearchChange = (e) => {
@@ -89,18 +77,194 @@ const ScanDiagnose = () => {
     });
   };
 
-  const handleGeneratePDF = () => {
-    alert('PDF report generation functionality will be implemented here');
+  const handleGeneratePDF = async () => {
+    if (!scanResults) return;
+
+    const document = new jsPDF();
+    const pageWidth = document.internal.pageSize.getWidth();
+    const pageHeight = document.internal.pageSize.getHeight();
+    const margin = 18;
+    const contentWidth = pageWidth - margin * 2;
+    let cursorY = margin;
+    let logoDataUrl = null;
+
+    try {
+      const response = await fetch('/assets/logo.png');
+      if (response.ok) {
+        const logoBlob = await response.blob();
+        logoDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(logoBlob);
+        });
+      }
+    } catch {
+      logoDataUrl = null;
+    }
+
+    const ensureSpace = (height) => {
+      if (cursorY + height > pageHeight - margin) {
+        document.addPage();
+        cursorY = margin;
+      }
+    };
+
+    const addSectionTitle = (title) => {
+      ensureSpace(14);
+      cursorY += 3;
+      document.setFont('helvetica', 'bold');
+      document.setFontSize(12);
+      document.setTextColor(35, 45, 35);
+      document.text(title, margin, cursorY);
+      cursorY += 7;
+    };
+
+    const addParagraph = (text, options = {}) => {
+      const value = String(text || '').trim() || options.emptyText || 'Not provided';
+      document.setFont('helvetica', 'normal');
+      document.setFontSize(10);
+      document.setTextColor(70, 75, 70);
+      const lines = document.splitTextToSize(value, contentWidth);
+      const lineHeight = 5;
+      for (const line of lines) {
+        ensureSpace(lineHeight);
+        document.text(line, margin, cursorY);
+        cursorY += lineHeight;
+      }
+      cursorY += 2;
+    };
+
+    const addList = (items, emptyText) => {
+      if (!items?.length) {
+        addParagraph(emptyText);
+        return;
+      }
+      items.forEach((item) => addParagraph(`- ${item}`));
+    };
+
+    const scanDate = scanResults.createdAt ? new Date(scanResults.createdAt) : new Date();
+    const diagnosed = scanResults.diagnosisIdentified !== false;
+    document.setFillColor(252, 250, 241);
+    document.rect(0, 0, pageWidth, 54, 'F');
+    document.setFillColor(18, 101, 48);
+    document.rect(0, 0, 4, 54, 'F');
+    if (logoDataUrl) document.addImage(logoDataUrl, 'PNG', margin, 8, 36, 36, undefined, 'FAST');
+    document.setFont('helvetica', 'bold');
+    document.setFontSize(17);
+    document.setTextColor(36, 75, 43);
+    const titleX = logoDataUrl ? margin + 44 : margin;
+    document.text(diagnosisMode === 'livestock' ? 'DiagnoX Livestock Health Report' : 'DiagnoX Crop Health Report', titleX, 23);
+    document.setFont('helvetica', 'normal');
+    document.setFontSize(9);
+    document.setTextColor(80, 90, 80);
+    document.text(`Powered by Loryi AI  |  Generated ${scanDate.toLocaleString()}`, titleX, 32);
+    document.setFillColor(18, 101, 48);
+    document.rect(margin, 54, contentWidth * 0.72, 1.5, 'F');
+    document.setFillColor(242, 184, 35);
+    document.rect(margin + contentWidth * 0.72, 54, contentWidth * 0.28, 1.5, 'F');
+    cursorY = 66;
+
+    addSectionTitle('Scan Summary');
+    if (diagnosisMode === 'livestock') {
+      addParagraph(`Animal: ${scanResults.species}`);
+      addParagraph(`Affected area: ${scanResults.bodyArea}`);
+      addParagraph(`Urgency: ${scanResults.urgency}`);
+      addSectionTitle('Visual Assessment');
+      addParagraph(scanResults.assessment);
+      addSectionTitle('Visible Signs');
+      addList(scanResults.visibleSigns, 'No clear signs could be identified from this image.');
+      addSectionTitle('Possible Conditions');
+      addList(scanResults.possibleConditions, 'No possible condition could be suggested from this image.');
+      addSectionTitle('Care Guidance');
+      addList(scanResults.careGuidance, 'Keep the animal comfortable and contact a veterinarian for advice.');
+      addSectionTitle('Seek Veterinary Care If');
+      addList(scanResults.seekVeterinarianIf, 'Seek veterinary help if the animal worsens or appears distressed.');
+    } else {
+      addParagraph(`Diagnosis: ${scanResults.diseaseName || 'Unable to identify'}`);
+      addParagraph(`Scientific name: ${scanResults.scientificName || 'Not identified'}`);
+      addParagraph(`Diagnosis confidence: ${Number(scanResults.confidence) || 0}%`);
+      addParagraph(`Severity: ${diagnosed ? (scanResults.severity || 'Not assessed') : 'Not assessed'}`);
+      addParagraph(`${diagnosed ? 'Affected crops' : 'Crop identified'}: ${(scanResults.affectedCrops || []).join(', ') || 'Not identified'}`);
+      addSectionTitle('Description');
+      addParagraph(scanResults.description);
+      addSectionTitle('Symptoms');
+      addList(scanResults.symptoms, 'No symptoms were identified from this image.');
+      addSectionTitle('Possible Causes');
+      addList(scanResults.causes, 'No cause could be determined from this image.');
+      addSectionTitle('Recommended Treatments');
+      addList(scanResults.treatments, 'No treatment recommendation is available for this image.');
+      addSectionTitle('Prevention Tips');
+      addList(scanResults.preventionTips, 'No prevention tips are available for this image.');
+    }
+
+    if (scanResults.imageUrl) {
+      ensureSpace(90);
+      addSectionTitle('Uploaded Image');
+      const imageFormat = scanResults.imageUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+      document.addImage(scanResults.imageUrl, imageFormat, margin, cursorY, Math.min(contentWidth, 120), 75, undefined, 'FAST');
+      cursorY += 80;
+    }
+
+    ensureSpace(18);
+    document.setFont('helvetica', 'italic');
+    document.setFontSize(8);
+    document.setTextColor(100, 100, 100);
+    document.text(
+      document.splitTextToSize(diagnosisMode === 'livestock'
+        ? (scanResults.disclaimer || 'This image-based triage is not a veterinary diagnosis. Have a veterinarian or qualified animal-health worker examine the animal.')
+        : 'This AI-generated result is an advisory based on visible image evidence, not a laboratory confirmation. Verify uncertain or severe symptoms with a qualified agronomist and follow local product labels and regulations.', contentWidth),
+      margin,
+      cursorY,
+    );
+
+    const pageCount = document.internal.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page += 1) {
+      document.setPage(page);
+      document.setFont('helvetica', 'normal');
+      document.setFontSize(8);
+      document.setTextColor(110, 110, 110);
+      document.text(`Powered by Loryi AI | Copyright (c) ${new Date().getFullYear()} Loryi. All rights reserved.`, margin, pageHeight - 8);
+      document.text(`Page ${page} of ${pageCount}`, pageWidth - margin, pageHeight - 8, { align: 'right' });
+    }
+
+    const safeName = (diagnosisMode === 'livestock' ? scanResults.species : scanResults.diseaseName || 'crop-diagnosis')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    document.save(`diagnox-${safeName || 'crop-diagnosis'}-${scanDate.toISOString().slice(0, 10)}.pdf`);
   };
+
+  const videoSearchQuery = [scanResults?.diseaseName, scanResults?.affectedCrops?.[0], 'crop treatment']
+    .filter((value) => value && value !== 'Unable to identify')
+    .join(' ');
 
   return (
     <div>
+      <div className="mb-6 inline-flex rounded-md border border-gray-200 p-1" role="group" aria-label="Diagnosis type">
+        {[
+          { id: 'crop', label: 'Crop diagnosis' },
+          { id: 'livestock', label: 'Livestock diagnosis' },
+        ].map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            onClick={() => changeDiagnosisMode(mode.id)}
+            aria-pressed={diagnosisMode === mode.id}
+            className={`rounded px-4 py-2 text-sm font-medium ${diagnosisMode === mode.id ? 'bg-orange-600 text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
       {!scanResults ? (
         <div>
           <div className="mb-6">
-            <h2 className="text-lg font-medium text-gray-900 mb-2">Scan & Diagnose Crop Disease</h2>
+            <h2 className="text-lg font-medium text-gray-900 mb-2">
+              {diagnosisMode === 'livestock' ? 'Scan & Assess Livestock Health' : 'Scan & Diagnose Crop Disease'}
+            </h2>
             <p className="text-gray-600">
-              Upload an image of your affected crop for AI-powered disease identification and treatment recommendations.
+              {diagnosisMode === 'livestock'
+                ? 'Upload a clear photo of an animal or affected area for visual health triage and guidance on when to contact a veterinarian.'
+                : 'Upload an image of your affected crop for AI-powered disease identification and treatment recommendations.'}
             </p>
           </div>
           
@@ -137,18 +301,22 @@ const ScanDiagnose = () => {
                   <input
                     type="file"
                     className="hidden"
-                    accept="image/*"
+                    accept="image/png,image/jpeg"
                     onChange={handleFileChange}
                   />
                 </label>
               </div>
+
+              {scanError && (
+                <p role="alert" className="mt-3 text-sm text-red-700">{scanError}</p>
+              )}
               
               <div className="mt-4 flex space-x-3">
                 <button
                   onClick={handleScan}
-                  disabled={!file || scanning}
+                  disabled={!file || scanning || (diagnosisMode === 'livestock' && (!livestockDetails.species || !livestockDetails.bodyArea))}
                   className={`px-4 py-2 rounded-md shadow-sm flex-1 flex items-center justify-center ${
-                    !file || scanning ? 'bg-gray-300 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700 text-white'
+                    !file || scanning || (diagnosisMode === 'livestock' && (!livestockDetails.species || !livestockDetails.bodyArea)) ? 'bg-gray-300 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700 text-white'
                   }`}
                 >
                   {scanning ? (
@@ -183,7 +351,7 @@ const ScanDiagnose = () => {
             
             {/* Search Options */}
             <div>
-              <div className="bg-gray-50 p-6 rounded-lg">
+              {diagnosisMode === 'crop' ? <div className="bg-gray-50 p-6 rounded-lg">
                 <h3 className="text-md font-medium text-gray-900 mb-4">Search Disease Database</h3>
                 <div className="space-y-4">
                   <div>
@@ -249,7 +417,49 @@ const ScanDiagnose = () => {
                     Search Database
                   </button>
                 </div>
-              </div>
+              </div> : <div className="bg-gray-50 p-6 rounded-lg space-y-4">
+                <h3 className="text-md font-medium text-gray-900">Animal details</h3>
+                <div>
+                  <label htmlFor="livestockSpecies" className="block text-sm font-medium text-gray-700 mb-1">Animal type</label>
+                  <select
+                    id="livestockSpecies"
+                    value={livestockDetails.species}
+                    onChange={(event) => setLivestockDetails({ ...livestockDetails, species: event.target.value })}
+                    className="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                  >
+                    <option value="">Select animal type</option>
+                    <option value="Cattle">Cattle</option>
+                    <option value="Goat">Goat</option>
+                    <option value="Sheep">Sheep</option>
+                    <option value="Poultry">Poultry</option>
+                    <option value="Pig">Pig</option>
+                    <option value="Camel">Camel</option>
+                    <option value="Donkey">Donkey</option>
+                    <option value="Other livestock">Other livestock</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="livestockBodyArea" className="block text-sm font-medium text-gray-700 mb-1">Affected area</label>
+                  <select
+                    id="livestockBodyArea"
+                    value={livestockDetails.bodyArea}
+                    onChange={(event) => setLivestockDetails({ ...livestockDetails, bodyArea: event.target.value })}
+                    className="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                  >
+                    <option value="">Select affected area</option>
+                    <option value="Eye">Eye</option>
+                    <option value="Skin">Skin</option>
+                    <option value="Skin around the eye">Skin around the eye</option>
+                    <option value="Mouth">Mouth</option>
+                    <option value="Nose">Nose</option>
+                    <option value="Hoof or foot">Hoof or foot</option>
+                    <option value="Udder">Udder</option>
+                    <option value="Feathers">Feathers</option>
+                    <option value="Other or whole animal">Other or whole animal</option>
+                  </select>
+                </div>
+                <p className="text-xs text-gray-600">Photo assessment is not a veterinary diagnosis. Urgent or worsening signs need an animal-health professional.</p>
+              </div>}
             </div>
           </div>
           
@@ -264,7 +474,9 @@ const ScanDiagnose = () => {
                 <h3 className="text-sm font-medium text-yellow-800">Tip</h3>
                 <div className="mt-2 text-sm text-yellow-700">
                   <p>
-                    For best results, take close-up photos in good lighting. Make sure the affected area is clearly visible and centered in the frame.
+                    {diagnosisMode === 'livestock'
+                      ? 'Use a clear, well-lit photo of the affected area. Avoid stressing or restraining an unwell animal to take a photo.'
+                      : 'For best results, take close-up photos in good lighting. Make sure the affected area is clearly visible and centered in the frame.'}
                   </p>
                 </div>
               </div>
@@ -275,7 +487,9 @@ const ScanDiagnose = () => {
         <div>
           <div className="mb-6 flex justify-between items-center">
             <div>
-              <h2 className="text-lg font-medium text-gray-900">Diagnosis Results</h2>
+              <h2 className="text-lg font-medium text-gray-900">
+                {diagnosisMode === 'livestock' ? 'Livestock Health Assessment' : 'Diagnosis Results'}
+              </h2>
               <p className="text-gray-600">Scan completed on {new Date().toLocaleDateString()}</p>
             </div>
             <div className="flex space-x-2">
@@ -297,6 +511,78 @@ const ScanDiagnose = () => {
             </div>
           </div>
           
+          {diagnosisMode === 'livestock' ? (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-1 space-y-6">
+                <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow">
+                  <div className="p-4 border-b border-gray-200">
+                    <h3 className="text-md font-medium text-gray-900">Uploaded Image</h3>
+                  </div>
+                  <div className="p-4">
+                    <img src={scanResults.imageUrl} alt={`${scanResults.species} ${scanResults.bodyArea} submitted for assessment`} className="w-full h-auto rounded-lg" />
+                  </div>
+                </div>
+                <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow">
+                  <div className="p-4 border-b border-gray-200">
+                    <h3 className="text-md font-medium text-gray-900">Assessment Summary</h3>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div className="flex justify-between gap-4">
+                      <span className="text-sm text-gray-600">Animal:</span>
+                      <span className="text-sm font-medium text-right">{scanResults.species}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-sm text-gray-600">Affected area:</span>
+                      <span className="text-sm font-medium text-right">{scanResults.bodyArea}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-sm text-gray-600">Urgency:</span>
+                      <span className={`text-sm font-medium text-right ${scanResults.urgency === 'Emergency' || scanResults.urgency === 'Urgent veterinary care' ? 'text-red-700' : 'text-gray-900'}`}>
+                        {scanResults.urgency}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="lg:col-span-2 space-y-6">
+                <section className="bg-white border border-gray-200 rounded-lg shadow p-5">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Visual Assessment</h3>
+                  <p className="text-sm text-gray-700">{scanResults.assessment}</p>
+                </section>
+                <section className="bg-white border border-gray-200 rounded-lg shadow p-5">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Visible Signs</h3>
+                  {scanResults.visibleSigns?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1">
+                      {scanResults.visibleSigns.map((sign, index) => <li key={index}>{sign}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500">No clear signs could be identified from this image.</p>}
+                </section>
+                <section className="bg-white border border-gray-200 rounded-lg shadow p-5">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Possible Conditions</h3>
+                  {scanResults.possibleConditions?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1">
+                      {scanResults.possibleConditions.map((condition, index) => <li key={index}>{condition}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500">No possible condition could be suggested from this image.</p>}
+                </section>
+                <section className="bg-white border border-gray-200 rounded-lg shadow p-5">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Care Guidance</h3>
+                  {scanResults.careGuidance?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1">
+                      {scanResults.careGuidance.map((item, index) => <li key={index}>{item}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500">Keep the animal comfortable and contact a veterinarian for advice.</p>}
+                  <h4 className="text-sm font-medium text-gray-900 mt-5 mb-2">Seek Veterinary Care If</h4>
+                  {scanResults.seekVeterinarianIf?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1">
+                      {scanResults.seekVeterinarianIf.map((item, index) => <li key={index}>{item}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500">Signs worsen, the animal appears distressed, or several animals are affected.</p>}
+                  <p className="mt-5 border-t border-gray-100 pt-3 text-xs text-gray-500">{scanResults.disclaimer}</p>
+                </section>
+              </div>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1">
               <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow">
@@ -322,28 +608,33 @@ const ScanDiagnose = () => {
                     <span className="text-sm font-italic">{scanResults.scientificName}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Confidence:</span>
+                    <span className="text-sm text-gray-600">Diagnosis confidence:</span>
                     <span className="text-sm font-medium">{scanResults.confidence}%</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Severity:</span>
-                    <span className={`text-sm font-medium px-2 py-0.5 rounded-full ${
+                    {scanResults.diagnosisIdentified === false ? (
+                      <span className="text-sm font-medium text-gray-500">Not assessed</span>
+                    ) : <span className={`text-sm font-medium px-2 py-0.5 rounded-full ${
                       scanResults.severity === 'Low' ? 'bg-green-100 text-green-800' :
                       scanResults.severity === 'Moderate' ? 'bg-yellow-100 text-yellow-800' :
                       scanResults.severity === 'High' ? 'bg-orange-100 text-orange-800' : 
                       'bg-red-100 text-red-800'
                     }`}>
                       {scanResults.severity}
-                    </span>
+                    </span>}
                   </div>
                   <div>
-                    <span className="text-sm text-gray-600 block mb-1">Affected Crops:</span>
+                    <span className="text-sm text-gray-600 block mb-1">
+                      {scanResults.diagnosisIdentified === false ? 'Crop identified:' : 'Affected Crops:'}
+                    </span>
                     <div className="flex flex-wrap gap-1">
-                      {scanResults.affectedCrops.map((crop, index) => (
+                      {(scanResults.affectedCrops || []).map((crop, index) => (
                         <span key={index} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
                           {crop}
                         </span>
                       ))}
+                      {!scanResults.affectedCrops?.length && <span className="text-sm text-gray-500">Not identified</span>}
                     </div>
                   </div>
                 </div>
@@ -360,18 +651,18 @@ const ScanDiagnose = () => {
                   <p className="text-sm text-gray-600 mb-4">{scanResults.description}</p>
                   
                   <h4 className="text-sm font-medium text-gray-900 mb-2">Symptoms</h4>
-                  <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
-                    {scanResults.symptoms.map((symptom, index) => (
-                      <li key={index} className="mb-1">{symptom}</li>
-                    ))}
-                  </ul>
+                  {scanResults.symptoms?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
+                      {scanResults.symptoms.map((symptom, index) => <li key={index} className="mb-1">{symptom}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500 mb-4">No symptoms were identified from this image.</p>}
                   
                   <h4 className="text-sm font-medium text-gray-900 mb-2">Causes</h4>
-                  <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
-                    {scanResults.causes.map((cause, index) => (
-                      <li key={index} className="mb-1">{cause}</li>
-                    ))}
-                  </ul>
+                  {scanResults.causes?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
+                      {scanResults.causes.map((cause, index) => <li key={index} className="mb-1">{cause}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500 mb-4">No cause could be determined from this image.</p>}
                 </div>
               </div>
               
@@ -380,18 +671,18 @@ const ScanDiagnose = () => {
                   <h3 className="text-md font-medium text-gray-900">Recommended Treatments</h3>
                 </div>
                 <div className="p-4">
-                  <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
-                    {scanResults.treatments.map((treatment, index) => (
-                      <li key={index} className="mb-1">{treatment}</li>
-                    ))}
-                  </ul>
+                  {scanResults.treatments?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-600 mb-4">
+                      {scanResults.treatments.map((treatment, index) => <li key={index} className="mb-1">{treatment}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500 mb-4">No treatment recommendation is available for this image.</p>}
                   
                   <h4 className="text-sm font-medium text-gray-900 mb-2">Prevention Tips</h4>
-                  <ul className="list-disc pl-5 text-sm text-gray-600">
-                    {scanResults.preventionTips.map((tip, index) => (
-                      <li key={index} className="mb-1">{tip}</li>
-                    ))}
-                  </ul>
+                  {scanResults.preventionTips?.length ? (
+                    <ul className="list-disc pl-5 text-sm text-gray-600">
+                      {scanResults.preventionTips.map((tip, index) => <li key={index} className="mb-1">{tip}</li>)}
+                    </ul>
+                  ) : <p className="text-sm text-gray-500">No prevention tips are available for this image.</p>}
                 </div>
               </div>
               
@@ -400,32 +691,23 @@ const ScanDiagnose = () => {
                   <h3 className="text-md font-medium text-gray-900">Treatment Videos</h3>
                 </div>
                 <div className="p-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="border border-gray-200 rounded-lg p-3">
-                      <div className="bg-gray-100 rounded aspect-w-16 aspect-h-9 flex items-center justify-center mb-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <h5 className="text-sm font-medium">How to Treat Powdery Mildew Organically</h5>
-                      <p className="text-xs text-gray-500">5:24 • University Extension</p>
-                    </div>
-                    <div className="border border-gray-200 rounded-lg p-3">
-                      <div className="bg-gray-100 rounded aspect-w-16 aspect-h-9 flex items-center justify-center mb-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <h5 className="text-sm font-medium">Prevention Strategies for Cucurbit Diseases</h5>
-                      <p className="text-xs text-gray-500">7:12 • AgTech Academy</p>
-                    </div>
-                  </div>
+                  {videoSearchQuery ? (
+                    <a
+                      href={`https://www.youtube.com/results?search_query=${encodeURIComponent(videoSearchQuery)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-medium text-orange-700 hover:text-orange-800 underline"
+                    >
+                      Find videos for {scanResults.diseaseName}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-gray-500">Videos are unavailable until a crop health issue is identified.</p>
+                  )}
                 </div>
               </div>
             </div>
           </div>
+          )}
         </div>
       )}
     </div>

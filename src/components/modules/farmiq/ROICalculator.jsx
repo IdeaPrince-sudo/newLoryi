@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../../../lib/api';
 import {
   ResponsiveContainer,
   BarChart,
@@ -22,6 +23,7 @@ const ROICalculator = () => {
       totalRevenue: 7200.00,
       profit: 2735.40,
       roi: 61.27,
+      standardYieldKg: 2400,
       details: {
         costs: [
           { category: "Land Rent", amount: 100.00 },
@@ -114,6 +116,11 @@ const ROICalculator = () => {
     costReduction: 0,
     yieldIncrease: 0
   });
+  const [marketCommodity, setMarketCommodity] = useState('Yellow Maize');
+  const [marketCentre, setMarketCentre] = useState('');
+  const [marketData, setMarketData] = useState({ availableCommodities: [], availableCentres: [], latestQuote: null });
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketError, setMarketError] = useState('');
   const [calculatedROI, setCalculatedROI] = useState({
     totalCost: selectedFarmType.totalCost,
     totalRevenue: selectedFarmType.totalRevenue,
@@ -124,9 +131,33 @@ const ROICalculator = () => {
   // Colors for pie chart
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
+  const isCropFarm = selectedFarmType.type === 'General Crop Farming';
+  const liveCropRevenue = isCropFarm && marketData.latestQuote
+    ? (selectedFarmType.standardYieldKg / 1000) * marketData.latestQuote.priceGhsPerTonne
+    : selectedFarmType.totalRevenue;
+
+  useEffect(() => {
+    if (!isCropFarm) return undefined;
+    let active = true;
+    setMarketLoading(true);
+    setMarketError('');
+    api.farmMarketPrices(marketCommodity, marketCentre)
+      .then((result) => {
+        if (active) setMarketData(result);
+      })
+      .catch((error) => {
+        if (active) {
+          setMarketData((current) => ({ ...current, latestQuote: null }));
+          setMarketError(error.message || 'GCX market prices could not be loaded.');
+        }
+      })
+      .finally(() => { if (active) setMarketLoading(false); });
+    return () => { active = false; };
+  }, [isCropFarm, marketCommodity, marketCentre]);
+
   useEffect(() => {
     calculateROI();
-  }, [selectedFarmType, customInputs]);
+  }, [selectedFarmType, customInputs, marketData.latestQuote]);
 
   const handleFarmTypeChange = (e) => {
     const farmType = farmTypes.find(farm => farm.type === e.target.value);
@@ -141,6 +172,11 @@ const ROICalculator = () => {
     });
   };
 
+  const handleMarketCommodityChange = (event) => {
+    setMarketCommodity(event.target.value);
+    setMarketCentre('');
+  };
+
   const calculateROI = () => {
     // Apply scale factor
     const scaledCost = selectedFarmType.totalCost * customInputs.scale;
@@ -149,7 +185,7 @@ const ROICalculator = () => {
     const costAfterReduction = scaledCost * (1 - (customInputs.costReduction / 100));
     
     // Apply yield/revenue increase (percentage)
-    const revenueAfterIncrease = selectedFarmType.totalRevenue * 
+    const revenueAfterIncrease = liveCropRevenue *
       customInputs.scale * 
       (1 + (customInputs.yieldIncrease / 100));
     
@@ -173,14 +209,21 @@ const ROICalculator = () => {
     name: item.category,
     value: item.amount * customInputs.scale * (1 - (customInputs.costReduction / 100))
   }));
+  const costTotal = costData.reduce((total, item) => total + item.value, 0);
 
+  const estimatedCropTonnes = isCropFarm
+    ? selectedFarmType.standardYieldKg * customInputs.scale * (1 + customInputs.yieldIncrease / 100) / 1000
+    : 0;
   const revenueData = selectedFarmType.details.revenue.map(item => ({
-    name: item.item,
-    value: item.amount * 
+    name: isCropFarm && marketData.latestQuote
+      ? `${marketCommodity} sales (${estimatedCropTonnes.toFixed(1)} t @ GHS ${marketData.latestQuote.priceGhsPerTonne.toLocaleString()}/t)`
+      : item.item,
+    value: item.amount * (liveCropRevenue / selectedFarmType.totalRevenue) *
       customInputs.scale * 
       (1 + (customInputs.yieldIncrease / 100)) * 
       (1 + (customInputs.marketPriceAdjustment / 100))
   }));
+  const revenueTotal = revenueData.reduce((total, item) => total + item.value, 0);
 
   const comparisonData = [
     { name: 'General Crop', roi: farmTypes[0].roi },
@@ -215,6 +258,38 @@ const ROICalculator = () => {
                 ))}
               </select>
             </div>
+
+            {isCropFarm && (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                <h4 className="text-sm font-semibold text-emerald-950">GCX Live Market Price</h4>
+                <p className="mt-1 text-xs text-emerald-900">Crop revenue uses the latest eligible Ghana Commodity Exchange closing quote per metric tonne.</p>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Commodity
+                    <select value={marketCommodity} onChange={handleMarketCommodityChange} className="mt-1 w-full rounded-md border border-gray-300 bg-white p-2">
+                      {(marketData.availableCommodities.length ? marketData.availableCommodities : ['Yellow Maize', 'White Maize', 'Rice', 'Soya Bean', 'Sorghum', 'Sesame']).map((commodity) => <option key={commodity} value={commodity}>{commodity}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Delivery centre
+                    <select value={marketCentre} onChange={(event) => setMarketCentre(event.target.value)} className="mt-1 w-full rounded-md border border-gray-300 bg-white p-2">
+                      <option value="">Latest across centres</option>
+                      {marketData.availableCentres.map((centre) => <option key={centre} value={centre}>{centre}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div aria-live="polite" className="mt-3 text-sm">
+                  {marketLoading ? <p className="text-gray-600">Loading GCX quotes…</p> : marketError ? <p className="text-amber-800">{marketError} Crop revenue will use the baseline estimate.</p> : marketData.latestQuote ? (
+                    <p className="font-medium text-emerald-950">
+                      GH₵{marketData.latestQuote.priceGhsPerTonne.toLocaleString()} / tonne · {marketData.latestQuote.deliveryCentre || 'GCX'} · Grade {marketData.latestQuote.grade || '—'}
+                      <span className="block text-xs font-normal text-gray-600">Quote date: {new Date(`${marketData.latestQuote.quoteDate}T00:00:00`).toLocaleDateString()} · {marketData.latestQuote.ageDays} days old · Source: {marketData.source}</span>
+                      {!marketData.latestQuote.isRecent && <span className="block text-xs font-medium text-amber-800">This is the latest available quote but is more than 30 days old.</span>}
+                    </p>
+                  ) : <p className="text-amber-800">{marketData.message || 'No recent GCX quote is available; baseline revenue will be used.'}</p>}
+                </div>
+                <a href="https://www.gcx.com.gh/market-data" target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-medium text-emerald-800 underline">View GCX market data</a>
+              </div>
+            )}
             
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -355,15 +430,14 @@ const ROICalculator = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="bg-white p-4 rounded-md shadow-sm">
           <h3 className="text-lg font-medium text-gray-700 mb-4">Cost Breakdown</h3>
-          <div className="h-80">
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={costData}
                   cx="50%"
                   cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  label={false}
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
@@ -376,19 +450,28 @@ const ROICalculator = () => {
               </PieChart>
             </ResponsiveContainer>
           </div>
+          <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
+            {costData.map((item, index) => (
+              <li key={item.name} className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                <span className="min-w-0 flex-1 truncate text-gray-700" title={item.name}>{item.name}</span>
+                <span className="shrink-0 text-gray-500">{costTotal ? ((item.value / costTotal) * 100).toFixed(0) : 0}%</span>
+                <span className="w-24 shrink-0 text-right font-medium text-gray-800">{formatCurrency(item.value)}</span>
+              </li>
+            ))}
+          </ul>
         </div>
         
         <div className="bg-white p-4 rounded-md shadow-sm">
           <h3 className="text-lg font-medium text-gray-700 mb-4">Revenue Sources</h3>
-          <div className="h-80">
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={revenueData}
                   cx="50%"
                   cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  label={false}
                   outerRadius={80}
                   fill="#82ca9d"
                   dataKey="value"
@@ -401,6 +484,16 @@ const ROICalculator = () => {
               </PieChart>
             </ResponsiveContainer>
           </div>
+          <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
+            {revenueData.map((item, index) => (
+              <li key={item.name} className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                <span className="min-w-0 flex-1 truncate text-gray-700" title={item.name}>{item.name}</span>
+                <span className="shrink-0 text-gray-500">{revenueTotal ? ((item.value / revenueTotal) * 100).toFixed(0) : 0}%</span>
+                <span className="w-24 shrink-0 text-right font-medium text-gray-800">{formatCurrency(item.value)}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
       

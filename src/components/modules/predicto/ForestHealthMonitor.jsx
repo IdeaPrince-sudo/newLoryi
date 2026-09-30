@@ -1,15 +1,24 @@
 import { useState } from 'react';
+import { useEffect } from 'react';
+import { api } from '../../../lib/api';
 
-import { analyzeForestHealth } from './useForestHealth';
+const regions = ['Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern', 'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah', 'Upper East', 'Upper West', 'Volta', 'Western', 'Western North'];
 
-export default function ForestHealthMonitor() {
-  const [region, setRegion] = useState('Ahafo');
+export default function ForestHealthMonitor({ selectedLocation, onLocationChange }) {
+  const [region, setRegion] = useState(selectedLocation?.name || 'Greater Accra');
   const [report, setReport] = useState(null);
   const [detectedLocation, setDetectedLocation] = useState(null); // { latitude, longitude }
   const [locationName, setLocationName] = useState(null); // { city, state }
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [loadingAddress, setLoadingAddress] = useState(false);
   const [error, setError] = useState(null);
+  const [monitoring, setMonitoring] = useState(null);
+  const liveData = monitoring?.selected;
+
+  useEffect(() => {
+    if (selectedLocation?.name && !selectedLocation.latitude) setRegion(selectedLocation.name);
+    api.monitoring(selectedLocation || 'Greater Accra').then(setMonitoring).catch(() => setMonitoring(null));
+  }, [selectedLocation]);
 
   // Use browser geolocation to get lat/lon
   const handleUseMyLocation = () => {
@@ -17,6 +26,13 @@ export default function ForestHealthMonitor() {
     setLoadingLocation(true);
     setLocationName(null);
     setReport(null);
+
+    if (selectedLocation?.latitude && selectedLocation?.longitude) {
+      setDetectedLocation({ latitude: selectedLocation.latitude, longitude: selectedLocation.longitude });
+      setLocationName({ city: selectedLocation.placeName || selectedLocation.name, state: selectedLocation.address || 'Current location' });
+      setLoadingLocation(false);
+      return;
+    }
 
     if (!navigator.geolocation) {
       setError('Geolocation is not supported by your browser.');
@@ -28,6 +44,7 @@ export default function ForestHealthMonitor() {
       (position) => {
         const { latitude, longitude } = position.coords;
         setDetectedLocation({ latitude, longitude });
+        onLocationChange?.({ name: 'My Location', latitude, longitude });
         setLoadingLocation(false);
         fetchAddressFromCoords(latitude, longitude);
       },
@@ -53,25 +70,28 @@ export default function ForestHealthMonitor() {
           json.address.city ||
           json.address.town ||
           json.address.village ||
+          json.address.municipality ||
+          json.address.suburb ||
+          json.name ||
+          json.address.county ||
           'Unknown town';
         // Pick the region/state from returned address data
         const state = json.address.state || json.address.region || 'Unknown region';
 
         setLocationName({ city, state });
+        onLocationChange?.({ name: 'My Location', placeName: city, address: json.display_name || `${city}, ${state}`, latitude: lat, longitude: lon });
 
         // Auto-set the region dropdown to detected state if it matches known regions
-        const knownRegions = ['Ahafo', 'Ashanti', 'Upper West', 'Savannah'];
-        if (knownRegions.includes(state)) {
-          setRegion(state);
-        } else {
-          setRegion('Ahafo'); // fallback default
-        }
+        const matchedRegion = regions.find((item) => item.toLowerCase() === state.toLowerCase().replace(/ region$/, ''));
+        setRegion(matchedRegion || 'Greater Accra');
       } else {
         setLocationName({ city: 'Unknown town', state: 'Unknown region' });
-        setRegion('Ahafo');
+        onLocationChange?.({ name: 'My Location', placeName: 'Current location', address: `Coordinates: ${lat.toFixed(5)}, ${lon.toFixed(5)}`, latitude: lat, longitude: lon });
+        setRegion('Greater Accra');
       }
     } catch {
       setLocationName({ city: 'Unknown town', state: 'Unknown region' });
+      onLocationChange?.({ name: 'My Location', placeName: 'Current location', address: `Coordinates: ${lat.toFixed(5)}, ${lon.toFixed(5)}`, latitude: lat, longitude: lon });
       setRegion('Ahafo');
     }
     setLoadingAddress(false);
@@ -83,8 +103,15 @@ export default function ForestHealthMonitor() {
       setError('Please select a region.');
       return;
     }
-    const result = analyzeForestHealth(region);
-    setReport(result);
+    if (liveData) {
+      const coverStatus = liveData.ndvi >= 0.65 ? 'Healthy' : liveData.ndvi >= 0.45 ? 'Moderate' : 'Declining';
+      const fireRisk = liveData.rainfall7d < 5 ? 'High' : liveData.rainfall7d < 15 ? 'Medium' : 'Low';
+      const soilRisk = liveData.current.soilMoisture < 20 ? 'Erosion Risk' : liveData.current.soilMoisture < 35 ? 'Moderate' : 'Low';
+      const degradationLevel = liveData.ndvi < 0.4 ? 'Severe' : liveData.ndvi < 0.55 ? 'Moderate' : 'Mild';
+      setReport({ coverStatus, fireRisk, soilRisk, degradationLevel });
+      return;
+    }
+    setError('Live monitoring data is not available yet. Please try again.');
   };
 
   // Color helper as before
@@ -120,10 +147,7 @@ export default function ForestHealthMonitor() {
           aria-label="Select Region"
           disabled={loadingLocation}
         >
-          <option value="Ahafo">Ahafo</option>
-          <option value="Ashanti">Ashanti</option>
-          <option value="Upper West">Upper West</option>
-          <option value="Savannah">Savannah</option>
+          {regions.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
 
         <button

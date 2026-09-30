@@ -176,7 +176,7 @@ const ResourceManagement = () => {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cost ($)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Cost (GHS)</label>
               <input
                 type="number"
                 name="cost"
@@ -230,7 +230,7 @@ const ResourceManagement = () => {
           </div>
           <div className="bg-white p-3 rounded-md shadow-sm">
             <p className="text-sm text-gray-500">Total Value</p>
-            <p className="text-xl font-bold">${calculateTotalValue().toLocaleString()}</p>
+            <p className="text-xl font-bold">GH₵{calculateTotalValue().toLocaleString()}</p>
           </div>
           <div className="bg-white p-3 rounded-md shadow-sm">
             <p className="text-sm text-gray-500">Resource Types</p>
@@ -267,7 +267,7 @@ const ResourceManagement = () => {
                       {resource.quantity} {resource.unit}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${resource.cost.toLocaleString()}
+                      GH₵{resource.cost.toLocaleString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(resource.purchaseDate)}

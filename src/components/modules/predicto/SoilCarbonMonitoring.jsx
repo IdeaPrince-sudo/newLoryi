@@ -1,19 +1,41 @@
 import { useState } from "react";
-import { estimateCarbonAndGHG } from "./useCarbonModel";
+import { useEffect } from "react";
+import { api } from '../../../lib/api';
 
-export default function SoilCarbonMonitoring() {
-  const [region, setRegion] = useState("Ejisu");
+const regions = ['Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern', 'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah', 'Upper East', 'Upper West', 'Volta', 'Western', 'Western North'];
+
+export default function SoilCarbonMonitoring({ selectedLocation, onLocationChange }) {
+  const [region, setRegion] = useState(selectedLocation?.name || "Greater Accra");
   const [detectedLocation, setDetectedLocation] = useState(null); // { latitude, longitude }
   const [locationName, setLocationName] = useState(null);
   const [data, setData] = useState(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [loadingAddress, setLoadingAddress] = useState(false);
   const [error, setError] = useState(null);
+  const [monitoring, setMonitoring] = useState(null);
+  const [loadingMonitoring, setLoadingMonitoring] = useState(true);
+  const liveData = monitoring?.selected;
+
+  useEffect(() => {
+    if (selectedLocation?.name && !selectedLocation.latitude) setRegion(selectedLocation.name);
+    setLoadingMonitoring(true);
+    api.monitoring(selectedLocation || 'Greater Accra')
+      .then(setMonitoring)
+      .catch(() => setMonitoring(null))
+      .finally(() => setLoadingMonitoring(false));
+  }, [selectedLocation]);
 
   const handleUseMyLocation = () => {
     setError(null);
     setLoadingLocation(true);
     setLocationName(null);
+
+    if (selectedLocation?.latitude && selectedLocation?.longitude) {
+      setDetectedLocation({ latitude: selectedLocation.latitude, longitude: selectedLocation.longitude });
+      setLocationName({ city: selectedLocation.placeName || selectedLocation.name, state: selectedLocation.address || 'Current location' });
+      setLoadingLocation(false);
+      return;
+    }
 
     if (!navigator.geolocation) {
       setError("Geolocation is not supported by your browser.");
@@ -25,6 +47,7 @@ export default function SoilCarbonMonitoring() {
       (position) => {
         const { latitude, longitude } = position.coords;
         setDetectedLocation({ latitude, longitude });
+        onLocationChange?.({ name: 'My Location', latitude, longitude });
         setLoadingLocation(false);
 
         fetchAddressFromCoords(latitude, longitude);
@@ -44,24 +67,37 @@ export default function SoilCarbonMonitoring() {
       );
       const json = await res.json();
       if (json.address) {
-        const city = json.address.city || json.address.town || json.address.village || "Unknown town";
+        const city = json.address.city || json.address.town || json.address.village || json.address.municipality || json.address.suburb || json.name || json.address.county || json.address.state || "Unknown town";
         const state = json.address.state || json.address.region || "Unknown region";
         setLocationName({ city, state });
-        setRegion(state);
+        onLocationChange?.({ name: 'My Location', placeName: city, address: json.display_name || `${city}, ${state}`, latitude: lat, longitude: lon });
+        const matchedRegion = regions.find((item) => item.toLowerCase() === state.toLowerCase().replace(/ region$/, ''));
+        setRegion(matchedRegion || 'Greater Accra');
       } else {
         setLocationName({ city: "Unknown town", state: "Unknown region" });
+        onLocationChange?.({ name: 'My Location', placeName: 'Current location', address: `Coordinates: ${lat.toFixed(5)}, ${lon.toFixed(5)}`, latitude: lat, longitude: lon });
       }
     } catch {
       setLocationName({ city: "Unknown town", state: "Unknown region" });
+      onLocationChange?.({ name: 'My Location', placeName: 'Current location', address: `Coordinates: ${lat.toFixed(5)}, ${lon.toFixed(5)}`, latitude: lat, longitude: lon });
     }
     setLoadingAddress(false);
   };
 
   const handleCheck = () => {
     setError(null);
-    const locationToUse = region;
-    const result = estimateCarbonAndGHG(locationToUse);
-    setData(result);
+    if (loadingMonitoring) {
+      setError('Loading live monitoring data. Please wait a moment.');
+      return;
+    }
+    if (liveData) {
+      const soilCarbon = Number((2 + liveData.current.soilMoisture / 20).toFixed(1));
+      const ghgEmissions = Number(Math.max(1, 24 - liveData.current.humidity * 0.08 + liveData.current.temperature * 0.15).toFixed(1));
+      const anomaly = liveData.current.soilMoisture < 20 ? 'High Risk' : liveData.current.soilMoisture < 35 ? 'Moderate Risk' : 'Normal';
+      setData({ soilCarbon, ghgEmissions, anomaly });
+      return;
+    }
+    setError('Live monitoring data is not available yet. Please try again.');
   };
 
   // Color indicator helpers
@@ -110,9 +146,7 @@ export default function SoilCarbonMonitoring() {
             disabled={loadingLocation}
             aria-label="Select Region"
           >
-            <option value="Ejisu">Ejisu</option>
-            <option value="Wa">Wa</option>
-            <option value="Tamale">Tamale</option>
+            {regions.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </div>
 
@@ -147,10 +181,10 @@ export default function SoilCarbonMonitoring() {
 
       <button
         onClick={handleCheck}
-        disabled={!region}
+        disabled={!region || loadingMonitoring}
         className="bg-green-700 text-white px-8 py-3 rounded hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed w-full text-lg font-semibold"
       >
-        Monitor Soil Carbon & GHG
+        {loadingMonitoring ? 'Loading live data...' : 'Monitor Soil Carbon & GHG'}
       </button>
 
       {error && (

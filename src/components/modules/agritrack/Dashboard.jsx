@@ -6,9 +6,17 @@ import TaskDashboard from './dashboards/TaskDashboard';
 import TreatmentDashboard from './dashboards/TreatmentDashboard';
 import ActivityDashboard from './dashboards/ActivityDashboard';
 import ReportDashboard from './dashboards/ReportDashboard';
+import BankSupplyChainDashboard from './BankSupplyChainDashboard';
+import { useAuth } from '../../../contexts/AuthContext';
+import { AgriTrackProvider } from './AgriTrackContext';
 
 const AgriTrack = () => {
+  const { currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
+
+  if (currentUser?.role === 'bank') {
+    return <BankSupplyChainDashboard />;
+  }
   
   const renderTabContent = () => {
     switch (activeTab) {
@@ -134,7 +142,7 @@ const AgriTrack = () => {
       
       {/* Tab Content */}
       <div className="pb-10">
-        {renderTabContent()}
+        <AgriTrackProvider>{renderTabContent()}</AgriTrackProvider>
       </div>
     </div>
   );

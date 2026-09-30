@@ -1,4 +1,5 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
+import { api } from '../../../lib/api';
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -445,7 +446,11 @@ const raindropSVG = (color) => `
   </svg>
 `;
 
-const GhanaRainfallMap = () => {
+const GhanaRainfallMap = ({ selectedLocation }) => {
+  const [monitoring, setMonitoring] = useState(null);
+  useEffect(() => {
+    api.monitoring(selectedLocation || 'Greater Accra').then(setMonitoring).catch(() => setMonitoring(null));
+  }, [selectedLocation]);
   const mapContainer = useRef(null);
   const map = useRef(null);
   const popup = useRef(new mapboxgl.Popup({ closeButton: false, closeOnClick: false }));
@@ -621,6 +626,7 @@ const GhanaRainfallMap = () => {
       <h2 style={{ textAlign: "center", color: "#2171b5", marginBottom: 24 }}>
         Rainfall Patterns & Forest-Savannah Transitional Zone in Ghana
       </h2>
+      {monitoring?.selected && <p className="mb-3 text-sm text-slate-600">Live {monitoring.selected.name} rainfall: {monitoring.selected.rainfall7d} mm/day average. Source: Open-Meteo.</p>}
       <div
         ref={mapContainer}
         style={{

@@ -1,18 +1,20 @@
 import { useState } from "react";
-import { predictYield } from "./useCropYieldModel";
 
-export default function CropYieldPrediction() {
+export default function CropYieldPrediction({ selectedLocation, onLocationChange }) {
   const [crop, setCrop] = useState("maize");
   const [location, setLocation] = useState(null); // {lat, lng}
   const [yieldEstimate, setYieldEstimate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const hasSharedLocation = Number.isFinite(selectedLocation?.latitude) && Number.isFinite(selectedLocation?.longitude);
 
   // For detailed breakdown
   const [details, setDetails] = useState(null);
 
   const handleGetLocationAndPredict = () => {
     setError(null);
+    setNotice(null);
     setYieldEstimate(null);
     setDetails(null);
 
@@ -21,40 +23,42 @@ export default function CropYieldPrediction() {
       return;
     }
 
+    if (hasSharedLocation) {
+      predictAtLocation(selectedLocation.latitude, selectedLocation.longitude);
+      return;
+    }
+
     if (!navigator.geolocation) {
-      setError("Geolocation is not supported by your browser.");
+      setNotice("Using Greater Accra because browser location access is unavailable.");
+      predictAtLocation(5.75, -0.2);
       return;
     }
 
     setLoading(true);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        };
-        setLocation({ lat: coords.lat.toFixed(6), lng: coords.lng.toFixed(6) });
-
-        // Simulate async prediction with detailed info
-        setTimeout(() => {
-          try {
-            // This is a more detailed prediction function returning breakdown
-            const result = predictYieldWithDetails(crop, coords);
-            setYieldEstimate(result.predictedYield.toFixed(2));
-            setDetails(result);
-          } catch {
-            setError("Failed to predict yield. Please try again.");
-          } finally {
-            setLoading(false);
-          }
-        }, 1000);
-      },
+    navigator.geolocation.getCurrentPosition((pos) => predictAtLocation(pos.coords.latitude, pos.coords.longitude),
       () => {
-        setError("Unable to retrieve your location.");
-        setLoading(false);
+        setNotice("Using Greater Accra because browser location access was unavailable.");
+        predictAtLocation(5.75, -0.2);
       }
     );
+  };
+
+  const predictAtLocation = (latitude, longitude) => {
+    const coords = { lat: latitude, lng: longitude };
+    setLocation({ lat: latitude.toFixed(6), lng: longitude.toFixed(6) });
+    onLocationChange?.({ ...selectedLocation, name: 'My Location', latitude, longitude });
+    setTimeout(() => {
+      try {
+        const result = predictYieldWithDetails(crop, coords);
+        setYieldEstimate(result.predictedYield.toFixed(2));
+        setDetails(result);
+      } catch {
+        setError("Failed to predict yield. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    }, 500);
   };
 
   const handleReset = () => {
@@ -62,6 +66,7 @@ export default function CropYieldPrediction() {
     setLocation(null);
     setYieldEstimate(null);
     setError(null);
+    setNotice(null);
     setDetails(null);
   };
 
@@ -89,6 +94,14 @@ export default function CropYieldPrediction() {
             <option value="maize">Maize</option>
             <option value="rice">Rice</option>
             <option value="tomato">Tomato</option>
+            <option value="cassava">Cassava</option>
+            <option value="yam">Yam</option>
+            <option value="plantain">Plantain</option>
+            <option value="cocoa">Cocoa</option>
+            <option value="millet">Millet</option>
+            <option value="sorghum">Sorghum</option>
+            <option value="groundnut">Groundnut</option>
+            <option value="soybean">Soybean</option>
           </select>
         </div>
 
@@ -114,6 +127,12 @@ export default function CropYieldPrediction() {
         </div>
 
         {/* Error */}
+        {notice && (
+          <p className="text-amber-700 text-sm font-medium mt-2" role="status">
+            {notice}
+          </p>
+        )}
+
         {error && (
           <p className="text-red-600 text-sm font-medium mt-2" role="alert">
             ⚠️ {error}
@@ -190,6 +209,14 @@ export function predictYieldWithDetails(crop, location) {
     maize: 3.5,
     rice: 4.0,
     tomato: 6.0,
+    cassava: 12.0,
+    yam: 10.0,
+    plantain: 9.0,
+    cocoa: 0.8,
+    millet: 2.0,
+    sorghum: 2.5,
+    groundnut: 2.2,
+    soybean: 2.4,
   };
 
   const baseYield = baseYields[crop] ?? 3.0;

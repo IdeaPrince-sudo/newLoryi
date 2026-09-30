@@ -1,13 +1,22 @@
-import React, { useState } from 'react';
-import { subsidyPrograms } from '../fertiWiseData';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../../../../contexts/AuthContext';
+import { api } from '../../../../lib/api';
 import Guide from './Guide';
 
 const SubsidyPrograms = () => {
+  const { currentUser } = useAuth();
+  const [programs, setPrograms] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRegion, setFilterRegion] = useState('');
   const [filterType, setFilterType] = useState('');
   const [showApplicationForm, setShowApplicationForm] = useState(false);
   const [selectedProgram, setSelectedProgram] = useState(null);
+  const [showProgramForm, setShowProgramForm] = useState(false);
+  const [programForm, setProgramForm] = useState({ name: '', type: '', region: '', description: '', benefitAmount: '', eligibilitySummary: '', applicationDeadline: '', requiredDocuments: '' });
 
   // Form state
   const [formData, setFormData] = useState({
@@ -29,15 +38,23 @@ const SubsidyPrograms = () => {
     declarationAccepted: false,
   });
 
-  // Extract unique regions and types for filters
-  const regions = [...new Set(subsidyPrograms.map(program => program.region))];
-  const types = [...new Set(subsidyPrograms.map(program => program.type))];
+  useEffect(() => {
+    let active = true;
+    api.subsidyPrograms()
+      .then((records) => { if (active) setPrograms(records); })
+      .catch((requestError) => { if (active) setError(requestError.message || 'Subsidy programs could not be loaded.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  const regions = useMemo(() => [...new Set(programs.map((program) => program.region).filter(Boolean))], [programs]);
+  const types = useMemo(() => [...new Set(programs.map((program) => program.type).filter(Boolean))], [programs]);
 
   // Apply filters to programs
-  const filteredPrograms = subsidyPrograms.filter(program => {
+  const filteredPrograms = programs.filter(program => {
     const matchesSearch =
-      program.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      program.description.toLowerCase().includes(searchTerm.toLowerCase());
+      String(program.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(program.description || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesRegion = filterRegion === '' || program.region === filterRegion;
     const matchesType = filterType === '' || program.type === filterType;
 
@@ -46,11 +63,18 @@ const SubsidyPrograms = () => {
 
   // Format date for display
   const formatDate = dateString => {
+    if (!dateString || Number.isNaN(new Date(dateString).getTime())) return 'No deadline set';
     const options = { year: 'numeric', month: 'short', day: 'numeric' };
     return new Date(dateString).toLocaleDateString(undefined, options);
   };
 
-  // Handle program application
+  const getApplicationStatus = deadline => {
+    if (!deadline || Number.isNaN(new Date(`${deadline}T23:59:59`).getTime())) return 'Open';
+    const deadlineDate = new Date(`${deadline}T23:59:59`);
+    if (deadlineDate < new Date()) return 'Closed';
+    return Math.ceil((deadlineDate - new Date()) / 86400000) <= 7 ? 'Closing Soon' : 'Open';
+  };
+
   const handleApplyForProgram = program => {
     setSelectedProgram(program);
     setShowApplicationForm(true);
@@ -88,41 +112,50 @@ const SubsidyPrograms = () => {
   };
 
   // Handle application submission
-  const handleSubmitApplication = e => {
+  const handleSubmitApplication = async e => {
     e.preventDefault();
-
-    // Simple validation example: check declaration accepted
-    if (!formData.declarationAccepted) {
-      alert('Please accept the declaration before submitting.');
-      return;
+    setError('');
+    setNotice('');
+    if (!formData.declarationAccepted) { setError('Accept the declaration before submitting.'); return; }
+    setSaving(true);
+    try {
+      const application = await api.createSubsidyApplication({
+        programId: selectedProgram.id,
+        ...formData,
+        farmSize: Number(formData.farmSize),
+        quantityRequired: Number(formData.quantityRequired),
+        documents: ['proofOfLand', 'idDocument', 'registrationCertificate'].filter((key) => formData[key]?.name).map((key) => `${key}: ${formData[key].name}`),
+        declarationAccepted: formData.declarationAccepted,
+      });
+      setNotice(`Application submitted for ${application.programName}. Status: ${application.status}. Document filenames were recorded; file contents were not uploaded.`);
+      setShowApplicationForm(false);
+      setSelectedProgram(null);
+    } catch (requestError) {
+      setError(requestError.message || 'Subsidy application could not be submitted.');
+    } finally {
+      setSaving(false);
     }
-
-    // In real app, send formData + selectedProgram info to backend API here.
-    // For demo, just alert success with basic info.
-
-    alert(`Your application for ${selectedProgram.name} has been submitted successfully!
-You will receive a confirmation email shortly.`);
-
-    setShowApplicationForm(false);
-    setSelectedProgram(null);
   };
 
-  // Calculate application status
-  const getApplicationStatus = deadline => {
-    const today = new Date();
-    const deadlineDate = new Date(deadline);
-
-    if (deadlineDate < today) {
-      return 'Closed';
+  const handleCreateProgram = async (event) => {
+    event.preventDefault();
+    setError('');
+    setNotice('');
+    setSaving(true);
+    try {
+      const program = await api.createSubsidyProgram({
+        ...programForm,
+        requiredDocuments: programForm.requiredDocuments.split(',').map((document) => document.trim()).filter(Boolean),
+      });
+      setPrograms((current) => [program, ...current]);
+      setProgramForm({ name: '', type: '', region: '', description: '', benefitAmount: '', eligibilitySummary: '', applicationDeadline: '', requiredDocuments: '' });
+      setShowProgramForm(false);
+      setNotice(`Program “${program.name}” was added.`);
+    } catch (requestError) {
+      setError(requestError.message || 'Program could not be created.');
+    } finally {
+      setSaving(false);
     }
-
-    const daysRemaining = Math.ceil((deadlineDate - today) / (1000 * 60 * 60 * 24));
-
-    if (daysRemaining <= 7) {
-      return 'Closing Soon';
-    }
-
-    return 'Open';
   };
 
   // Get status class for styling
@@ -141,7 +174,51 @@ You will receive a confirmation email shortly.`);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-gray-800">Fertilizer Subsidy Programs</h1>
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-800">Fertilizer Subsidy Programs</h1>
+          <p className="mt-1 text-sm text-gray-600">Browse active programs and submit applications for your farm.</p>
+        </div>
+        {currentUser?.role === 'admin' && <button type="button" onClick={() => { setShowProgramForm((open) => !open); setError(''); setNotice(''); }} className="rounded-md bg-emerald-800 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-900">{showProgramForm ? 'Cancel' : 'Add program'}</button>}
+      </header>
+
+      {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
+      {notice && <p role="status" className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{notice}</p>}
+
+      {showProgramForm && currentUser?.role === 'admin' && (
+        <form onSubmit={handleCreateProgram} className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-gray-900">Create subsidy program</h2>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label className="text-sm font-medium text-gray-700">Program name
+              <input required maxLength={160} value={programForm.name} onChange={(event) => setProgramForm((current) => ({ ...current, name: event.target.value }))} className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700">Program type
+              <input required maxLength={80} value={programForm.type} onChange={(event) => setProgramForm((current) => ({ ...current, type: event.target.value }))} placeholder="e.g. Fertilizer, Organic" className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700">Region
+              <input required maxLength={100} value={programForm.region} onChange={(event) => setProgramForm((current) => ({ ...current, region: event.target.value }))} placeholder="e.g. All Regions" className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700">Benefit amount
+              <input required maxLength={120} value={programForm.benefitAmount} onChange={(event) => setProgramForm((current) => ({ ...current, benefitAmount: event.target.value }))} placeholder="e.g. 50% subsidy on approved inputs" className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700">Eligibility summary
+              <input required maxLength={300} value={programForm.eligibilitySummary} onChange={(event) => setProgramForm((current) => ({ ...current, eligibilitySummary: event.target.value }))} className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700">Application deadline
+              <input required type="date" min={new Date().toISOString().slice(0, 10)} value={programForm.applicationDeadline} onChange={(event) => setProgramForm((current) => ({ ...current, applicationDeadline: event.target.value }))} className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700 md:col-span-2">Description
+              <textarea required maxLength={2000} rows={3} value={programForm.description} onChange={(event) => setProgramForm((current) => ({ ...current, description: event.target.value }))} className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+            <label className="text-sm font-medium text-gray-700 md:col-span-2">Required documents (comma separated)
+              <input value={programForm.requiredDocuments} onChange={(event) => setProgramForm((current) => ({ ...current, requiredDocuments: event.target.value }))} placeholder="e.g. National ID, Farm registration" className="mt-1.5 w-full rounded-md border border-gray-300 px-3 py-2 font-normal" />
+            </label>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button type="submit" disabled={saving} className="rounded-md bg-emerald-800 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-900 disabled:opacity-50">{saving ? 'Saving…' : 'Create program'}</button>
+          </div>
+        </form>
+      )}
 
       {showApplicationForm ? (
         <div className="bg-white p-6 rounded-lg shadow-sm max-w-4xl mx-auto">
@@ -387,6 +464,7 @@ You will receive a confirmation email shortly.`);
             {/* 4. Required Documents */}
             <div>
               <h3 className="text-base font-medium text-gray-800 mb-4">4. Required Documents</h3>
+              <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">Document filenames will be attached to this application record. File contents are not uploaded by the current API.</p>
               <div className="space-y-4">
                 <div>
                   <label htmlFor="proofOfLand" className="block text-sm font-medium text-gray-700 mb-1">
@@ -473,9 +551,10 @@ You will receive a confirmation email shortly.`);
             <div className="flex justify-end">
               <button
                 type="submit"
-                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                disabled={saving}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Submit Application
+                {saving ? 'Submitting…' : 'Submit Application'}
               </button>
             </div>
           </form>

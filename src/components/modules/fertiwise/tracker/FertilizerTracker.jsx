@@ -1,30 +1,64 @@
-import React, { useState } from 'react';
-import { fertilizerHistory } from '../fertiWiseData';
+import React, { useEffect, useState } from 'react';
+import { fertilizerPrices } from '../fertiWiseData';
+import { useAuth } from '../../../../contexts/AuthContext';
+import { api } from '../../../../lib/api';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
+const emptyRecord = () => ({
+  farmId: '',
+  date: new Date().toISOString().split('T')[0],
+  fertilizerType: '',
+  amountKg: '',
+  landAreaHa: '',
+  crop: '',
+  costGhs: '',
+  method: '',
+});
+
+const getAmountKg = (record) => Number(record.amountKg ?? String(record.amount || '').replace(/[^\d.-]/g, '')) || 0;
+const getCostGhs = (record) => Number(record.costGhs ?? record.cost) || 0;
+const formatCedis = (value) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value) || 0);
+
 const FertilizerTracker = () => {
+  const { currentUser } = useAuth();
+  const [farms, setFarms] = useState([]);
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('6months');
   const [selectedFarmerId, setSelectedFarmerId] = useState('');
   const [showAddRecordForm, setShowAddRecordForm] = useState(false);
-  const [newRecord, setNewRecord] = useState({
-    date: new Date().toISOString().split('T')[0],
-    fertilizerType: '',
-    amount: '',
-    landArea: '',
-    crop: '',
-    cost: ''
-  });
-  
-  // Get unique farmer IDs
-  const farmerIds = [...new Set(fertilizerHistory.map(record => record.farmerId))];
-  
-  // Get unique fertilizer types
-  const fertilizerTypes = [...new Set(fertilizerHistory.map(record => record.fertilizerType))];
-  
-  // Filter records based on selected farmer
-  const filteredRecords = selectedFarmerId 
-    ? fertilizerHistory.filter(record => record.farmerId === selectedFarmerId)
-    : fertilizerHistory;
+  const [newRecord, setNewRecord] = useState(emptyRecord);
+
+  useEffect(() => {
+    let active = true;
+    const loadTrackerData = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const [farmProfiles, applications] = await Promise.all([api.geoSenseFarms(), api.fertilizerApplications()]);
+        if (!active) return;
+        const ownFarms = farmProfiles.filter((farm) => farm.ownerId === currentUser?.id || farm.farmerId === currentUser?.id);
+        setFarms(ownFarms);
+        setRecords(applications.filter((record) => record.ownerId === currentUser?.id));
+        setNewRecord((current) => ({ ...current, farmId: current.farmId || (ownFarms.length === 1 ? String(ownFarms[0].id) : '') }));
+      } catch (requestError) {
+        if (active) setError(requestError.message || 'Fertilizer application history could not be loaded. Check the API connection and try again.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    loadTrackerData();
+    return () => { active = false; };
+  }, [currentUser?.id]);
+
+  const fertilizerTypes = [...new Set([...fertilizerPrices.map((fertilizer) => fertilizer.name), ...records.map((record) => record.fertilizerType)])];
+
+  const filteredRecords = selectedFarmerId
+    ? records.filter((record) => String(record.farmId) === selectedFarmerId)
+    : records;
     
   // Sort records by date (most recent first)
   const sortedRecords = [...filteredRecords].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -36,16 +70,20 @@ const FertilizerTracker = () => {
     
     switch (selectedFilter) {
       case '1month':
-        cutoffDate = new Date(now.setMonth(now.getMonth() - 1));
+        cutoffDate = new Date(now);
+        cutoffDate.setMonth(cutoffDate.getMonth() - 1);
         break;
       case '3months':
-        cutoffDate = new Date(now.setMonth(now.getMonth() - 3));
+        cutoffDate = new Date(now);
+        cutoffDate.setMonth(cutoffDate.getMonth() - 3);
         break;
       case '6months':
-        cutoffDate = new Date(now.setMonth(now.getMonth() - 6));
+        cutoffDate = new Date(now);
+        cutoffDate.setMonth(cutoffDate.getMonth() - 6);
         break;
       case '1year':
-        cutoffDate = new Date(now.setFullYear(now.getFullYear() - 1));
+        cutoffDate = new Date(now);
+        cutoffDate.setFullYear(cutoffDate.getFullYear() - 1);
         break;
       default:
         cutoffDate = new Date(0); // All records
@@ -63,7 +101,7 @@ const FertilizerTracker = () => {
     timeFilteredRecords.forEach(record => {
       const date = new Date(record.date);
       const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-      const amount = parseFloat(record.amount.replace(/[^\d.-]/g, ''));
+      const amount = getAmountKg(record);
       
       if (!recordsByMonth[monthKey]) {
         recordsByMonth[monthKey] = {
@@ -93,7 +131,7 @@ const FertilizerTracker = () => {
         };
       }
       
-      costsByMonth[monthKey].cost += record.cost;
+      costsByMonth[monthKey].cost += getCostGhs(record);
     });
     
     return Object.values(costsByMonth).sort((a, b) => a.month.localeCompare(b.month));
@@ -101,12 +139,12 @@ const FertilizerTracker = () => {
   
   // Calculate total usage for the period
   const totalUsage = timeFilteredRecords.reduce((sum, record) => {
-    const amount = parseFloat(record.amount.replace(/[^\d.-]/g, ''));
+    const amount = getAmountKg(record);
     return sum + amount;
   }, 0);
   
   // Calculate total cost for the period
-  const totalCost = timeFilteredRecords.reduce((sum, record) => sum + record.cost, 0);
+  const totalCost = timeFilteredRecords.reduce((sum, record) => sum + getCostGhs(record), 0);
   
   // Format date for display
   const formatDate = (dateString) => {
@@ -123,22 +161,29 @@ const FertilizerTracker = () => {
   };
   
   // Handle form submission
-  const handleSubmitRecord = (e) => {
+  const handleSubmitRecord = async (e) => {
     e.preventDefault();
-    
-    // In a real app, we would save this to a database
-    // For this demo, we'll just show a success message
-    
-    alert('New fertilizer application record added successfully!');
-    setShowAddRecordForm(false);
-    setNewRecord({
-      date: new Date().toISOString().split('T')[0],
-      fertilizerType: '',
-      amount: '',
-      landArea: '',
-      crop: '',
-      cost: ''
-    });
+    setError('');
+    setNotice('');
+    const application = {
+      ...newRecord,
+      amountKg: Number(newRecord.amountKg),
+      landAreaHa: Number(newRecord.landAreaHa),
+      costGhs: Number(newRecord.costGhs),
+    };
+    setSaving(true);
+    try {
+      const savedRecord = await api.createFertilizerApplication(application);
+      setRecords((current) => [savedRecord, ...current]);
+      setSelectedFarmerId(String(savedRecord.farmId));
+      setNotice(`Application record saved for ${savedRecord.farmName || 'your farm'}.`);
+      setShowAddRecordForm(false);
+      setNewRecord(emptyRecord());
+    } catch (requestError) {
+      setError(requestError.message || 'Application record could not be saved. Check the API connection and try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -149,12 +194,17 @@ const FertilizerTracker = () => {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-medium text-gray-800">Application History</h2>
           <button
-            onClick={() => setShowAddRecordForm(!showAddRecordForm)}
+            onClick={() => { setShowAddRecordForm(!showAddRecordForm); setError(''); setNotice(''); }}
+            disabled={!farms.length || loading}
             className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
           >
             {showAddRecordForm ? 'Cancel' : 'Add New Record'}
           </button>
         </div>
+
+        {error && <p role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
+        {notice && <p role="status" className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</p>}
+        {!loading && !farms.length && !error && <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Add a farm profile before recording fertilizer applications.</p>}
         
         {showAddRecordForm && (
           <div className="bg-gray-50 p-4 rounded-md mb-6">
@@ -163,16 +213,16 @@ const FertilizerTracker = () => {
             <form onSubmit={handleSubmitRecord}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Farmer ID</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Farm</label>
                   <select 
                     required
-                    value={newRecord.farmerId}
-                    onChange={(e) => handleInputChange('farmerId', e.target.value)}
+                    value={newRecord.farmId}
+                    onChange={(e) => handleInputChange('farmId', e.target.value)}
                     className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                   >
-                    <option value="">Select Farmer ID</option>
-                    {farmerIds.map(id => (
-                      <option key={id} value={id}>{id}</option>
+                    <option value="">Select your farm</option>
+                    {farms.map((farm) => (
+                      <option key={farm.id} value={farm.id}>{farm.farmName} · {farm.region || 'Region not set'}</option>
                     ))}
                   </select>
                 </div>
@@ -200,30 +250,31 @@ const FertilizerTracker = () => {
                     {fertilizerTypes.map(type => (
                       <option key={type} value={type}>{type}</option>
                     ))}
-                    <option value="Other">Other</option>
                   </select>
                 </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Amount (kg)</label>
                   <input
-                    type="text"
+                    type="number"
                     required
-                    value={newRecord.amount}
-                    onChange={(e) => handleInputChange('amount', e.target.value)}
-                    placeholder="e.g. 50 kg"
+                    min="0.01"
+                    step="0.01"
+                    value={newRecord.amountKg}
+                    onChange={(e) => handleInputChange('amountKg', e.target.value)}
                     className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                   />
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Land Area Applied (hectares)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Land Area Applied (hectares)</label>
                   <input
                     type="number"
+                    min="0.01"
                     step="0.01"
                     required
-                    value={newRecord.landArea}
-                    onChange={(e) => handleInputChange('landArea', e.target.value)}
+                    value={newRecord.landAreaHa}
+                    onChange={(e) => handleInputChange('landAreaHa', e.target.value)}
                     className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                   />
                 </div>
@@ -240,13 +291,14 @@ const FertilizerTracker = () => {
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost ($)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Cost (GH₵)</label>
                   <input
                     type="number"
+                    min="0"
                     step="0.01"
                     required
-                    value={newRecord.cost}
-                    onChange={(e) => handleInputChange('cost', parseFloat(e.target.value))}
+                    value={newRecord.costGhs}
+                    onChange={(e) => handleInputChange('costGhs', e.target.value)}
                     className="w-full border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
                   />
                 </div>
@@ -272,9 +324,10 @@ const FertilizerTracker = () => {
               <div className="mt-4 flex justify-end">
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                    disabled={saving || !farms.length}
+                    className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Save Record
+                  {saving ? 'Saving…' : 'Save Record'}
                 </button>
               </div>
             </form>
@@ -284,15 +337,16 @@ const FertilizerTracker = () => {
         <div className="mb-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0 mb-4">
             <div className="flex items-center">
-              <label className="text-sm font-medium text-gray-700 mr-2">Farmer:</label>
+              <label htmlFor="tracker-farm-filter" className="text-sm font-medium text-gray-700 mr-2">Farm:</label>
               <select
+                id="tracker-farm-filter"
                 value={selectedFarmerId}
                 onChange={(e) => setSelectedFarmerId(e.target.value)}
                 className="border-gray-300 rounded-md shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
               >
-                <option value="">All Farmers</option>
-                {farmerIds.map(id => (
-                  <option key={id} value={id}>{id}</option>
+                <option value="">All Farms</option>
+                {farms.map((farm) => (
+                  <option key={farm.id} value={farm.id}>{farm.farmName}</option>
                 ))}
               </select>
             </div>
@@ -372,7 +426,7 @@ const FertilizerTracker = () => {
               </div>
               <div>
                 <h3 className="text-sm font-medium text-gray-700">Total Cost</h3>
-                <p className="text-2xl font-bold text-gray-900">${totalCost.toFixed(2)}</p>
+                <p className="text-2xl font-bold text-gray-900">{formatCedis(totalCost)}</p>
               </div>
             </div>
           </div>
@@ -415,12 +469,12 @@ const FertilizerTracker = () => {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" />
                     <YAxis />
-                    <Tooltip formatter={(value) => [`$${value}`, 'Cost']} />
+                    <Tooltip formatter={(value) => [formatCedis(value), 'Cost']} />
                     <Legend />
                     <Area 
                       type="monotone" 
                       dataKey="cost" 
-                      name="Fertilizer Cost ($)" 
+                      name="Fertilizer Cost (GH₵)" 
                       stroke="#3B82F6" 
                       fill="#93C5FD" 
                       fillOpacity={0.6} 
@@ -434,13 +488,15 @@ const FertilizerTracker = () => {
         
         <h3 className="font-medium text-gray-800 mb-2">Application Records</h3>
         
-        {timeFilteredRecords.length > 0 ? (
+        {loading ? (
+          <p role="status" className="rounded-md bg-gray-50 p-6 text-center text-sm text-gray-600">Loading fertilizer application records…</p>
+        ) : timeFilteredRecords.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farmer</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farm</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fertilizer Type</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Crop</th>
@@ -454,19 +510,19 @@ const FertilizerTracker = () => {
                       {formatDate(record.date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {record.farmerId}
+                      {record.farmName || farms.find((farm) => String(farm.id) === String(record.farmId))?.farmName || 'Farm'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {record.fertilizerType}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {record.amount}
+                      {getAmountKg(record).toFixed(2)} kg
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {record.crop}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${record.cost.toFixed(2)}
+                      {formatCedis(getCostGhs(record))}
                     </td>
                   </tr>
                 ))}

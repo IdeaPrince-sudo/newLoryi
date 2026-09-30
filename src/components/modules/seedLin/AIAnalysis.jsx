@@ -1,80 +1,51 @@
 import React, { useState } from 'react';
+import { api } from '../../../lib/api';
 
 const AIAnalysis = () => {
   const [activeTab, setActiveTab] = useState('testkit');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [analysisError, setAnalysisError] = useState('');
 
-  // Mock analysis function
-  const analyzeImage = (file) => {
+  const changeAnalysisTab = (tab) => {
+    setActiveTab(tab);
+    setSelectedFile(null);
+    setAnalysisResult(null);
+    setAnalysisError('');
+  };
+
+  const analyzeImage = async (file) => {
     setIsAnalyzing(true);
     setAnalysisResult(null);
-    
-    // Simulate API call
-    setTimeout(() => {
+    setAnalysisError('');
+    try {
+      setAnalysisResult(await api.analyzeSeedImage(file, activeTab));
+    } catch (error) {
+      setAnalysisError(error.message || 'Image analysis failed. Please try again.');
+    } finally {
       setIsAnalyzing(false);
-      
-      // Mock result based on the active tab
-      if (activeTab === 'testkit') {
-        setAnalysisResult({
-          success: true,
-          testType: 'Lateral Flow Strip Test',
-          gmoProbability: 0.03,
-          conclusion: 'NEGATIVE',
-          details: 'The test shows negative result for common GMO markers. The sample is likely organic or conventional.',
-          recommendations: [
-            'Sample is suitable for organic certification',
-            'No further testing required for GMO compliance',
-            'Store results in blockchain for traceability'
-          ]
-        });
-      } else if (activeTab === 'morphology') {
-        setAnalysisResult({
-          success: true,
-          seedType: 'Corn (Zea mays)',
-          gmoProbability: 0.94,
-          conclusion: 'GMO TRAITS DETECTED',
-          details: 'Visual analysis detects morphological characteristics consistent with GMO corn varieties. Identified traits match with Bt insect resistance modifications.',
-          anomalies: [
-            'Uniform seed size exceeding natural variation',
-            'Modified embryo structure',
-            'Characteristic blue marker dye detected'
-          ],
-          recommendations: [
-            'Confirm with DNA testing',
-            'Not suitable for organic production',
-            'Store in GMO-specific storage'
-          ]
-        });
-      } else if (activeTab === 'pattern') {
-        setAnalysisResult({
-          success: true,
-          seedBatch: 'Mixed Seeds',
-          authenticity: 'SUSPICIOUS',
-          counterfeiting: {
-            probability: 0.78,
-            indicators: [
-              'Inconsistent coloration patterns',
-              'Package code format mismatch',
-              'QR code links to unauthorized domain'
-            ]
-          },
-          recommendations: [
-            'Report to authorities',
-            'Do not plant or distribute',
-            'Submit sample for forensic analysis'
-          ]
-        });
-      }
-    }, 2500);
+    }
   };
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setSelectedFile(file);
+    const [file] = e.target.files || [];
+    e.target.value = '';
+    setAnalysisResult(null);
+    setAnalysisError('');
+    if (!file) return;
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+    if (!allowedTypes.includes(file.type)) {
+      setSelectedFile(null);
+      setAnalysisError('Choose a PNG, JPG, WebP, or HEIC image.');
+      return;
     }
+    if (file.size > 10 * 1024 * 1024) {
+      setSelectedFile(null);
+      setAnalysisError('Image must be 10MB or smaller.');
+      return;
+    }
+    setSelectedFile(file);
   };
 
   const handleAnalyzeClick = () => {
@@ -105,8 +76,10 @@ const AIAnalysis = () => {
                'Counterfeit Pattern Detection'}
             </h4>
             <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-              analysisResult.conclusion === 'NEGATIVE' || analysisResult.authenticity === 'VERIFIED' ? 
-              'bg-green-100 text-green-800' : 
+              analysisResult.conclusion === 'NEGATIVE' || analysisResult.authenticity === 'VERIFIED' ?
+              'bg-green-100 text-green-800' :
+              analysisResult.conclusion === 'INCONCLUSIVE' || analysisResult.conclusion === 'INVALID' || analysisResult.authenticity === 'INCONCLUSIVE' ?
+              'bg-yellow-100 text-yellow-800' :
               'bg-red-100 text-red-800'
             }`}>
               {analysisResult.conclusion || analysisResult.authenticity}
@@ -122,14 +95,14 @@ const AIAnalysis = () => {
                     <span className="ml-2">{analysisResult.testType}</span>
                   </div>
                   <div className="mb-4">
-                    <span className="font-medium">GMO Probability:</span>
+                    <span className="font-medium">Positive indication confidence:</span>
                     <div className="mt-1 w-full bg-gray-200 rounded-full h-2">
                       <div 
                         className="bg-green-600 h-2 rounded-full" 
-                        style={{ width: `${analysisResult.gmoProbability * 100}%` }}
+                        style={{ width: `${analysisResult.positiveProbability * 100}%` }}
                       ></div>
                     </div>
-                    <span className="text-sm text-gray-500">{(analysisResult.gmoProbability * 100).toFixed(1)}%</span>
+                    <span className="text-sm text-gray-500">{(analysisResult.positiveProbability * 100).toFixed(1)}%</span>
                   </div>
                   <div className="mb-4">
                     <span className="font-medium">Details:</span>
@@ -145,14 +118,14 @@ const AIAnalysis = () => {
                     <span className="ml-2">{analysisResult.seedType}</span>
                   </div>
                   <div className="mb-4">
-                    <span className="font-medium">GMO Probability:</span>
+                    <span className="font-medium">Visual anomaly score:</span>
                     <div className="mt-1 w-full bg-gray-200 rounded-full h-2">
                       <div 
                         className="bg-red-600 h-2 rounded-full" 
-                        style={{ width: `${analysisResult.gmoProbability * 100}%` }}
+                        style={{ width: `${analysisResult.visualAnomalyScore * 100}%` }}
                       ></div>
                     </div>
-                    <span className="text-sm text-gray-500">{(analysisResult.gmoProbability * 100).toFixed(1)}%</span>
+                    <span className="text-sm text-gray-500">{(analysisResult.visualAnomalyScore * 100).toFixed(1)}%</span>
                   </div>
                   <div className="mb-4">
                     <span className="font-medium">Details:</span>
@@ -258,19 +231,19 @@ const AIAnalysis = () => {
         <div className="flex border-b overflow-x-auto">
           <button 
             className={`px-6 py-3 text-lg font-medium whitespace-nowrap ${activeTab === 'testkit' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}
-            onClick={() => setActiveTab('testkit')}
+            onClick={() => changeAnalysisTab('testkit')}
           >
             Test Kit Reader
           </button>
           <button 
             className={`px-6 py-3 text-lg font-medium whitespace-nowrap ${activeTab === 'morphology' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}
-            onClick={() => setActiveTab('morphology')}
+            onClick={() => changeAnalysisTab('morphology')}
           >
             Seed Morphology
           </button>
           <button 
             className={`px-6 py-3 text-lg font-medium whitespace-nowrap ${activeTab === 'pattern' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}
-            onClick={() => setActiveTab('pattern')}
+            onClick={() => changeAnalysisTab('pattern')}
           >
             Pattern Detection
           </button>
@@ -311,7 +284,7 @@ const AIAnalysis = () => {
                     <input
                       type="file"
                       className="sr-only"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
                       onChange={handleFileChange}
                     />
                     Select Image
@@ -388,7 +361,7 @@ const AIAnalysis = () => {
                       <input
                         type="file"
                         className="sr-only"
-                        accept="image/*"
+                        accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
                         onChange={handleFileChange}
                       />
                       Select Image
@@ -446,7 +419,7 @@ const AIAnalysis = () => {
                   
                   <div className="mt-3">
                     <label className="cursor-pointer inline-flex items-center px-3 py-1.5 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
-                      <input type="file" className="sr-only" accept="image/*" />
+                      <input type="file" className="sr-only" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" onChange={handleFileChange} />
                       Browse
                     </label>
                   </div>
@@ -464,7 +437,7 @@ const AIAnalysis = () => {
                   
                   <div className="mt-3">
                     <label className="cursor-pointer inline-flex items-center px-3 py-1.5 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
-                      <input type="file" className="sr-only" accept="image/*" />
+                      <input type="file" className="sr-only" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" onChange={handleFileChange} />
                       Browse
                     </label>
                   </div>
@@ -482,7 +455,7 @@ const AIAnalysis = () => {
                   
                   <div className="mt-3">
                     <label className="cursor-pointer inline-flex items-center px-3 py-1.5 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
-                      <input type="file" className="sr-only" accept="image/*" />
+                      <input type="file" className="sr-only" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" onChange={handleFileChange} />
                       Browse
                     </label>
                   </div>
@@ -492,6 +465,11 @@ const AIAnalysis = () => {
           )}
           
           <div className="mt-8 border-t border-gray-200 pt-6 flex justify-end">
+            {analysisError && (
+              <p className="mr-auto self-center text-sm text-red-700" role="alert">
+                {analysisError}
+              </p>
+            )}
             <button 
               onClick={handleAnalyzeClick}
               disabled={!selectedFile || isAnalyzing}

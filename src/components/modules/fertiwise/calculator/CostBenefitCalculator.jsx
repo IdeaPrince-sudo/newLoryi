@@ -2,6 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { fertilizerPrices, fertilizerRecommendations } from '../fertiWiseData';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
+const formatCedis = (amount) => new Intl.NumberFormat('en-GH', {
+  style: 'currency',
+  currency: 'GHS',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+}).format(Number(amount) || 0);
+
 const CostBenefitCalculator = () => {
   const [selectedCrop, setSelectedCrop] = useState('');
   const [landSize, setLandSize] = useState(1);
@@ -193,7 +200,7 @@ const CostBenefitCalculator = () => {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Crop Price ($/ton)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Crop Price (GH₵/ton)</label>
             <input
               type="number"
               value={cropPrice}
@@ -233,7 +240,7 @@ const CostBenefitCalculator = () => {
                   value={fert.name}
                   disabled={selectedFertilizers.some(f => f.name === fert.name)}
                 >
-                  {fert.name} - ${fert.price} {fert.unit}
+                  {fert.name} - {formatCedis(fert.price)} {fert.unit}
                 </option>
               ))}
             </select>
@@ -259,7 +266,7 @@ const CostBenefitCalculator = () => {
                       {fert.name}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${fertilizerPrices.find(fp => fp.name === fert.name)?.price || 0} per ton
+                      {formatCedis(fertilizerPrices.find(fp => fp.name === fert.name)?.price || 0)} per ton
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
@@ -272,7 +279,7 @@ const CostBenefitCalculator = () => {
                       />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${fert.cost.toFixed(2)}
+                      {formatCedis(fert.cost)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <button 
@@ -289,7 +296,7 @@ const CostBenefitCalculator = () => {
                     Total Cost:
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
-                    ${selectedFertilizers.reduce((sum, fert) => sum + fert.cost, 0).toFixed(2)}
+                    {formatCedis(selectedFertilizers.reduce((sum, fert) => sum + fert.cost, 0))}
                   </td>
                   <td></td>
                 </tr>
@@ -340,17 +347,17 @@ const CostBenefitCalculator = () => {
                   <div className="text-sm font-medium">{(expectedYield * landSize).toFixed(2)} tons</div>
                   
                   <div className="text-sm">Crop Price:</div>
-                  <div className="text-sm font-medium">${cropPrice}/ton</div>
+                  <div className="text-sm font-medium">{formatCedis(cropPrice)}/ton</div>
                   
                   <div className="text-sm">Total Revenue:</div>
-                  <div className="text-sm font-medium">${calculationResult.totalRevenue.toFixed(2)}</div>
+                  <div className="text-sm font-medium">{formatCedis(calculationResult.totalRevenue)}</div>
                   
                   <div className="text-sm">Total Fertilizer Cost:</div>
-                  <div className="text-sm font-medium">${calculationResult.totalFertilizerCost.toFixed(2)}</div>
+                  <div className="text-sm font-medium">{formatCedis(calculationResult.totalFertilizerCost)}</div>
                   
                   <div className="text-sm font-medium">Net Profit:</div>
                   <div className={`text-sm font-bold ${calculationResult.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    ${calculationResult.netProfit.toFixed(2)}
+                    {formatCedis(calculationResult.netProfit)}
                   </div>
                   
                   <div className="text-sm font-medium">Return on Investment (ROI):</div>
@@ -373,7 +380,7 @@ const CostBenefitCalculator = () => {
                     <XAxis dataKey="name" />
                     <YAxis />
                     <Tooltip 
-                      formatter={(value) => [`$${value.toFixed(2)}`, '']}
+                      formatter={(value) => [formatCedis(value), '']}
                     />
                     <Legend />
                     <Bar dataKey="profit" name="Profit" fill="#10B981" />
@@ -406,10 +413,10 @@ const CostBenefitCalculator = () => {
                       {(calculationResult.lowYieldScenario.yield * landSize).toFixed(2)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${calculationResult.lowYieldScenario.revenue.toFixed(2)}
+                      {formatCedis(calculationResult.lowYieldScenario.revenue)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.lowYieldScenario.profit >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
-                      ${calculationResult.lowYieldScenario.profit.toFixed(2)}
+                      {formatCedis(calculationResult.lowYieldScenario.profit)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.lowYieldScenario.roi >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
                       {calculationResult.lowYieldScenario.roi.toFixed(2)}%
@@ -423,10 +430,10 @@ const CostBenefitCalculator = () => {
                       {(expectedYield * landSize).toFixed(2)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${calculationResult.totalRevenue.toFixed(2)}
+                      {formatCedis(calculationResult.totalRevenue)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.netProfit >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
-                      ${calculationResult.netProfit.toFixed(2)}
+                      {formatCedis(calculationResult.netProfit)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.roi >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
                       {calculationResult.roi.toFixed(2)}%
@@ -440,10 +447,10 @@ const CostBenefitCalculator = () => {
                       {(calculationResult.highYieldScenario.yield * landSize).toFixed(2)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${calculationResult.highYieldScenario.revenue.toFixed(2)}
+                      {formatCedis(calculationResult.highYieldScenario.revenue)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.highYieldScenario.profit >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
-                      ${calculationResult.highYieldScenario.profit.toFixed(2)}
+                      {formatCedis(calculationResult.highYieldScenario.profit)}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${calculationResult.highYieldScenario.roi >= 0 ? 'text-green-600' : 'text-red-600'} font-medium`}>
                       {calculationResult.highYieldScenario.roi.toFixed(2)}%

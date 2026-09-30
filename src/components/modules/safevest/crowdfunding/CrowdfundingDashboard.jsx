@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../../../contexts/AuthContext';  // Adjust import path
+import { api } from '../../../../lib/api';
 import CampaignList from './CampaignList';
 import CampaignDetails from './CampaignDetails';
 import CampaignModal from './CampaignModal';
 import MyCampaigns from './MyCampaigns';
 import WithdrawalModal from './WithdrawalModal';
 import DonationModal from './DonationModal';
-import { mockCampaigns, mockDonations, mockWithdrawals } from '../../../../data/mockCrowdfundingData';
 
 const CrowdfundingDashboard = () => {
-  const { currentUser, updateCredits } = useAuth();
+  const { currentUser, refreshUser } = useAuth();
 
-  const [campaigns, setCampaigns] = useState(mockCampaigns);
-  const [donations, setDonations] = useState(mockDonations);
-  const [withdrawals, setWithdrawals] = useState(mockWithdrawals);
+  const [campaigns, setCampaigns] = useState([]);
+  const [donations, setDonations] = useState([]);
+  const [withdrawals, setWithdrawals] = useState([]);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
@@ -31,6 +31,14 @@ const CrowdfundingDashboard = () => {
 
   const creditCost = 5;
 
+  useEffect(() => {
+    api.campaigns()
+      .then((remoteCampaigns) => {
+        setCampaigns(remoteCampaigns);
+      })
+      .catch(() => {});
+  }, []);
+
   // Calculate dashboard statistics
   useEffect(() => {
     const totalRaised = campaigns.reduce((sum, campaign) => sum + campaign.currentAmount, 0);
@@ -45,41 +53,21 @@ const CrowdfundingDashboard = () => {
     });
   }, [campaigns, donations]);
 
-  // Deduct credits via AuthContext
-  const deductCredits = (amount) => {
-    if (!currentUser || currentUser.credits < amount) {
-      return false;
-    }
-    updateCredits(-amount); // deduct credits
-    return true;
-  };
-
   // Create new campaign with credit deduction
-  const handleCreateCampaign = (campaignData) => {
+  const handleCreateCampaign = async (campaignData) => {
     if (!currentUser) {
       alert('User not logged in.');
       return Promise.reject('User not logged in');
     }
 
-    if (!deductCredits(creditCost)) {
-      alert('Insufficient credits to create a campaign.');
-      return Promise.reject('Insufficient credits');
+    try {
+      const campaign = await api.createCampaign(campaignData);
+      setCampaigns((prev) => [campaign, ...prev]);
+      await refreshUser();
+    } catch (error) {
+      if (error.message.includes('Insufficient')) alert('Insufficient credits to create a campaign.');
+      throw error;
     }
-
-    const newCampaign = {
-      id: `campaign-${Date.now()}`,
-      creatorId: currentUserId,
-      creatorName: currentUser.name || 'Current User',
-      createdAt: new Date().toISOString(),
-      endDate: new Date(Date.now() + campaignData.duration * 24 * 60 * 60 * 1000).toISOString(),
-      currentAmount: 0,
-      withdrawnAmount: 0,
-      daysLeft: campaignData.duration,
-      ...campaignData,
-    };
-
-    setCampaigns(prev => [newCampaign, ...prev]);
-    return Promise.resolve();
   };
 
   // Update campaign data (no credits deducted)
@@ -110,13 +98,8 @@ const CrowdfundingDashboard = () => {
   };
 
   // Process a donation
-  const handleDonation = (donationData) => {
-    const donationId = `donation-${Date.now()}`;
-    const newDonation = {
-      id: donationId,
-      donorId: `donor-${Date.now()}`, // Replace with real donor ID if available
-      ...donationData
-    };
+  const handleDonation = async (donationData) => {
+    const newDonation = await api.donateToCampaign(donationData.campaignId, donationData.amount);
 
     setDonations(prev => [newDonation, ...prev]);
 
@@ -135,16 +118,12 @@ const CrowdfundingDashboard = () => {
       }));
     }
 
-    return Promise.resolve();
+    return newDonation;
   };
 
   // Process a withdrawal
-  const handleWithdrawal = (withdrawalData) => {
-    const withdrawalId = `withdrawal-${Date.now()}`;
-    const newWithdrawal = {
-      id: withdrawalId,
-      ...withdrawalData
-    };
+  const handleWithdrawal = async (withdrawalData) => {
+    const newWithdrawal = await api.withdrawFromCampaign(withdrawalData.campaignId, withdrawalData.amount);
 
     setWithdrawals(prev => [newWithdrawal, ...prev]);
 
@@ -163,7 +142,7 @@ const CrowdfundingDashboard = () => {
       }));
     }
 
-    return Promise.resolve();
+    return newWithdrawal;
   };
 
   const isOwner = (campaign) => campaign?.creatorId === currentUserId;

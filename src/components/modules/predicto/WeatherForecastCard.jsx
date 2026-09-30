@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Line } from "react-chartjs-2";
+import { api } from '../../../lib/api';
 import {
   Chart as ChartJS,
   LineElement,
@@ -12,39 +13,56 @@ import {
 
 ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
 
-const cities = {
-  Accra: [5.6037, -0.1870],
-  Kumasi: [6.6884, -1.6244],
-  Tamale: [9.4071, -0.8539],
-  Takoradi: [4.8993, -1.7603],
-};
-
-const cityAliases = {
-  Weija: "Accra",
-  Tema: "Accra",
-  // add more aliases here
-};
-
-const mockForecast = [
-  { day: "Mon", date: "Jul 22", temp: 30, rain: 0, condition: "Sunny", icon: "☀️" },
-  { day: "Tue", date: "Jul 23", temp: 28, rain: 5, condition: "Rain", icon: "🌧️" },
-  { day: "Wed", date: "Jul 24", temp: 27, rain: 0, condition: "Cloudy", icon: "☁️" },
-  { day: "Thu", date: "Jul 25", temp: 29, rain: 1, condition: "Partly Cloudy", icon: "⛅" },
-  { day: "Fri", date: "Jul 26", temp: 31, rain: 0, condition: "Sunny", icon: "☀️" },
-  { day: "Sat", date: "Jul 27", temp: 26, rain: 7, condition: "Rain", icon: "🌧️" },
-  { day: "Sun", date: "Jul 28", temp: 25, rain: 12, condition: "Thunderstorm", icon: "🌩️" },
+const regions = [
+  'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern', 'Greater Accra', 'North East',
+  'Northern', 'Oti', 'Savannah', 'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
 ];
 
-export default function WeatherForecastCard() {
+const cityAliases = {
+  Weija: 'Greater Accra', Tema: 'Greater Accra', Accra: 'Greater Accra', Kumasi: 'Ashanti', Tamale: 'Northern',
+};
+
+export default function WeatherForecastCard({ selectedLocation, onLocationChange }) {
   const [forecast, setForecast] = useState([]);
-  const [selectedCity, setSelectedCity] = useState("Accra");
+  const [localLocation, setLocalLocation] = useState({ name: 'Greater Accra' });
+  const location = selectedLocation || localLocation;
+  const selectedCity = location.name;
+  const currentPlaceName = location.placeName || location.name;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    setForecast(mockForecast);
-    setError("");
-  }, [selectedCity]);
+    let active = true;
+    setLoading(true);
+    api.weather(location)
+      .then((weather) => {
+        if (active) {
+          setForecast(weather.forecast);
+          setError("");
+        }
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message || "Unable to load live weather.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [location]);
+
+  useEffect(() => {
+    if (!location.latitude || !location.longitude || location.placeName && location.placeName !== 'Current location') return undefined;
+    let active = true;
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${location.latitude}&lon=${location.longitude}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (!active) return;
+        const placeName = data.address?.city || data.address?.town || data.address?.village || data.address?.municipality || data.address?.suburb || data.name || data.address?.county || data.address?.state || 'Current location';
+        onLocationChange?.({ ...location, placeName, address: data.display_name || location.address || 'Address unavailable' });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [location.latitude, location.longitude, location.placeName, location.address, onLocationChange]);
 
   const tempChartData = {
     labels: forecast.map((d) => d.day),
@@ -81,13 +99,20 @@ export default function WeatherForecastCard() {
   const [showTempChart, setShowTempChart] = useState(false);
   const [showRainChart, setShowRainChart] = useState(false);
 
+  const applyLocation = ({ name, placeName, address, latitude, longitude, detectedFrom }) => {
+    const nextLocation = { name, placeName, address, latitude, longitude, detectedFrom };
+    if (onLocationChange) onLocationChange(nextLocation);
+    else setLocalLocation(nextLocation);
+  };
+
   async function handleGetMyLocation() {
     setLoading(true);
     setError("");
     setForecast([]);
 
     if (!navigator.geolocation) {
-      setError("Geolocation is not supported by your browser.");
+      setError("Geolocation is not supported by your browser. Showing Greater Accra instead.");
+      applyLocation({ name: 'Greater Accra' });
       setLoading(false);
       return;
     }
@@ -95,58 +120,40 @@ export default function WeatherForecastCard() {
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        console.log("Got coords:", latitude, longitude);
 
         try {
           const response = await fetch(
             `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`
           );
-          if (!response.ok) throw new Error("Failed to fetch location info");
           const data = await response.json();
-
-          console.log("Reverse geocode data:", data);
-
-          // Extract city, town, or village
           const cityName =
-            data.address.city ||
-            data.address.town ||
-            data.address.village ||
-            data.address.county ||
+            data.address?.city ||
+            data.address?.town ||
+            data.address?.village ||
+            data.address?.municipality ||
+            data.address?.suburb ||
+            data.address?.county ||
+            data.name ||
+            data.address?.state ||
             null;
 
-          if (!cityName) {
-            setError("Unable to detect city from your location.");
-            setLoading(false);
-            return;
-          }
-
-          console.log("Detected city:", cityName);
-
-          // Check alias mapping
-          const mappedCity = cityAliases[cityName] || cityName;
-
-          // Verify if mapped city is in supported cities
-          const cityFound = Object.keys(cities).find(
-            (c) => c.toLowerCase() === mappedCity.toLowerCase()
-          );
-
-          if (cityFound) {
-            setSelectedCity(cityFound);
-            setError("");
-          } else {
-            setError(`Location detected: ${cityName}, but no forecast available.`);
-          }
+          const mappedRegion = cityAliases[cityName] || cityName || 'Greater Accra';
+          applyLocation({ name: 'My Location', placeName: cityName || data.address?.county || 'Current location', address: data.display_name || 'Address unavailable', latitude, longitude, detectedFrom: mappedRegion });
+          setError("");
         } catch (err) {
-          console.error("Reverse geocode error:", err);
-          setError("Failed to retrieve location details.");
+          console.warn('Reverse geocode unavailable, using coordinates directly:', err);
+          applyLocation({ name: 'My Location', placeName: 'Current location', address: `Coordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, latitude, longitude, detectedFrom: 'My Location' });
+          setError("");
         }
         setLoading(false);
       },
       (error) => {
-        console.error("Geolocation error:", error);
-        setError("Failed to get your location.");
+        console.warn('Geolocation denied or unavailable:', error);
+        setError("Location access unavailable. Showing Greater Accra forecast instead.");
+        applyLocation({ name: 'Greater Accra' });
         setLoading(false);
-      }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     );
   }
 
@@ -156,12 +163,13 @@ export default function WeatherForecastCard() {
         <h2 className="text-lg font-semibold text-gray-800">📅 7-Day Weather Forecast</h2>
         <select
           value={selectedCity}
-          onChange={(e) => setSelectedCity(e.target.value)}
+          onChange={(e) => (onLocationChange ? onLocationChange({ name: e.target.value }) : setLocalLocation({ name: e.target.value }))}
           className="border border-gray-300 rounded px-2 py-1 text-sm"
           disabled={loading}
         >
-          {Object.keys(cities).map((city) => (
-            <option key={city}>{city}</option>
+          {location.latitude && <option value="My Location">My Location</option>}
+          {regions.map((region) => (
+            <option key={region}>{region}</option>
           ))}
         </select>
       </div>
@@ -173,6 +181,13 @@ export default function WeatherForecastCard() {
       >
         {loading ? "Detecting Location..." : "Get My Location"}
       </button>
+
+      {location.latitude && (
+        <div className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+          <p><strong>Current location:</strong> {currentPlaceName}</p>
+          <p><strong>Address:</strong> {location.address || "Resolving address..."}</p>
+        </div>
+      )}
 
       {error && <p className="mb-4 text-red-600 font-semibold">{error}</p>}
 

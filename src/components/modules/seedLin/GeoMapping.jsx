@@ -1,29 +1,106 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import L from 'leaflet';
+
+const mockSeedLocations = [
+  { id: 1, type: 'Organic', name: 'Heirloom Tomato', lat: 37.7749, lng: -122.4194, supplier: 'EcoSeed Organics', place: 'San Francisco' },
+  { id: 2, type: 'GMO', name: 'BT Corn', lat: 40.7128, lng: -74.006, supplier: 'AgriTech Genetics', place: 'New York' },
+  { id: 3, type: 'Organic', name: 'Heritage Wheat', lat: 51.5074, lng: -0.1278, supplier: 'Natural Farms Co-op', place: 'London' },
+  { id: 4, type: 'GMO', name: 'RR Soybean', lat: 41.8781, lng: -87.6298, supplier: 'GenSeed Technologies', place: 'Chicago' },
+  { id: 5, type: 'Organic', name: 'Wild Rice', lat: 48.8566, lng: 2.3522, supplier: 'Traditional Seed Bank', place: 'Paris' },
+];
 
 const GeoMapping = () => {
   const [activeLayer, setActiveLayer] = useState('seeds');
   const [viewMode, setViewMode] = useState('map');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isMapLoading, setIsMapLoading] = useState(true);
+  const mapElementRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerLayerRef = useRef(null);
+  const tileLayerRef = useRef(null);
+  const filteredSeedLocations = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return mockSeedLocations;
+    return mockSeedLocations.filter((location) =>
+      [location.name, location.type, location.supplier, location.place].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [searchQuery]);
 
-  // Mock seed data for the map
-  const mockSeedLocations = [
-    { id: 1, type: 'Organic', name: 'Heirloom Tomato', lat: 37.7749, lng: -122.4194, supplier: 'EcoSeed Organics' },
-    { id: 2, type: 'GMO', name: 'BT Corn', lat: 40.7128, lng: -74.0060, supplier: 'AgriTech Genetics' },
-    { id: 3, type: 'Organic', name: 'Heritage Wheat', lat: 51.5074, lng: -0.1278, supplier: 'Natural Farms Co-op' },
-    { id: 4, type: 'GMO', name: 'RR Soybean', lat: 41.8781, lng: -87.6298, supplier: 'GenSeed Technologies' },
-    { id: 5, type: 'Organic', name: 'Wild Rice', lat: 48.8566, lng: 2.3522, supplier: 'Traditional Seed Bank' }
-  ];
+  useEffect(() => {
+    if (!mapElementRef.current) return undefined;
+    const map = L.map(mapElementRef.current, { scrollWheelZoom: true }).setView([30, -35], 2);
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => map.invalidateSize());
+    resizeObserver?.observe(mapElementRef.current);
+    requestAnimationFrame(() => map.invalidateSize());
 
-  // Simulate map loading
-  setTimeout(() => {
-    setIsMapLoading(false);
-  }, 2000);
+    return () => {
+      resizeObserver?.disconnect();
+      map.remove();
+      mapRef.current = null;
+      markerLayerRef.current = null;
+      tileLayerRef.current = null;
+    };
+  }, []);
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    console.log('Searching for:', searchQuery);
-    // In a real app, this would trigger a search on the map
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    tileLayerRef.current?.remove();
+    const tileLayer = viewMode === 'satellite'
+      ? L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri',
+        maxZoom: 18,
+      })
+      : L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      });
+    tileLayer.addTo(map);
+    tileLayerRef.current = tileLayer;
+  }, [viewMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const markerLayer = markerLayerRef.current;
+    if (!map || !markerLayer) return;
+    markerLayer.clearLayers();
+    if (activeLayer !== 'seeds') return;
+
+    filteredSeedLocations.forEach((location) => {
+      const color = location.type === 'Organic' ? '#16803c' : '#dc2626';
+      L.circleMarker([location.lat, location.lng], {
+        radius: 9,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.95,
+      })
+        .bindPopup(`<strong>${location.name}</strong><br>${location.type} seed source<br>${location.supplier}<br>${location.place}`)
+        .addTo(markerLayer);
+    });
+
+    if (filteredSeedLocations.length > 1) {
+      map.fitBounds(L.latLngBounds(filteredSeedLocations.map(({ lat, lng }) => [lat, lng])).pad(0.16), { maxZoom: 5 });
+    } else if (filteredSeedLocations.length === 1) {
+      const [location] = filteredSeedLocations;
+      map.setView([location.lat, location.lng], 7);
+    }
+  }, [activeLayer, filteredSeedLocations]);
+
+  const resetMapView = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (activeLayer === 'seeds' && filteredSeedLocations.length > 1) {
+      map.fitBounds(L.latLngBounds(filteredSeedLocations.map(({ lat, lng }) => [lat, lng])).pad(0.16), { maxZoom: 5 });
+    } else if (activeLayer === 'seeds' && filteredSeedLocations.length === 1) {
+      const [location] = filteredSeedLocations;
+      map.setView([location.lat, location.lng], 7);
+    } else {
+      map.setView([30, -35], 2);
+    }
   };
 
   return (
@@ -39,7 +116,7 @@ const GeoMapping = () => {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           {/* Search */}
           <div className="w-full md:w-1/3">
-            <form onSubmit={handleSearch}>
+            <form onSubmit={(event) => event.preventDefault()}>
               <div className="relative">
                 <input
                   type="text"
@@ -98,70 +175,44 @@ const GeoMapping = () => {
       {/* Map Container */}
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
         <div className="relative bg-gray-100" style={{ height: '500px' }}>
-          {isMapLoading ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex flex-col items-center">
-                <svg className="animate-spin h-10 w-10 text-green-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <p className="text-gray-600">Loading map data...</p>
-              </div>
-            </div>
-          ) : (
-            <div className="absolute inset-0 bg-gray-200">
-              {/* This would be replaced with an actual map component like Google Maps or Leaflet */}
-              <div className="h-full w-full flex items-center justify-center">
-                <div className="text-center">
-                  <p className="text-gray-500 mb-4">Interactive Map would render here</p>
-                  <p className="text-gray-500">Current view: {viewMode}</p>
-                  <p className="text-gray-500">Active layer: {activeLayer}</p>
-                </div>
-              </div>
-              
-              {/* Legend */}
-              <div className="absolute bottom-4 left-4 bg-white p-3 rounded-md shadow-md">
-                <h3 className="font-medium text-gray-700 mb-2">Legend</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center">
-                    <span className="h-4 w-4 bg-green-600 rounded-full mr-2"></span>
-                    <span className="text-sm">Organic Seeds</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="h-4 w-4 bg-red-600 rounded-full mr-2"></span>
-                    <span className="text-sm">GMO Seeds</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="h-4 w-4 border-2 border-blue-600 rounded-full mr-2"></span>
-                    <span className="text-sm">GeoFence Boundaries</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="h-4 w-4 bg-yellow-400 opacity-50 mr-2"></span>
-                    <span className="text-sm">GMO Restricted Zones</span>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Controls */}
-              <div className="absolute top-4 right-4 bg-white rounded-md shadow-md">
-                <button className="p-2 hover:bg-gray-100">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                </button>
-                <button className="p-2 hover:bg-gray-100 border-t border-gray-200">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                  </svg>
-                </button>
-                <button className="p-2 hover:bg-gray-100 border-t border-gray-200">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  </svg>
-                </button>
-              </div>
+          <div ref={mapElementRef} className="h-full w-full" aria-label="Seed source map" />
+          {activeLayer !== 'seeds' && (
+            <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded bg-white/95 px-4 py-2 text-sm text-gray-700 shadow" role="status">
+              {activeLayer === 'regulations'
+                ? 'Regulatory boundary data is not connected.'
+                : 'No geofence coordinates are recorded yet.'}
             </div>
           )}
+
+          {activeLayer === 'seeds' && filteredSeedLocations.length === 0 && (
+            <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded bg-white/95 px-4 py-2 text-sm text-gray-700 shadow" role="status">
+              No seed locations match “{searchQuery}”.
+            </div>
+          )}
+
+          <div className="absolute bottom-4 left-4 rounded-md bg-white/95 p-3 shadow-md">
+            <h3 className="mb-2 font-medium text-gray-700">{activeLayer === 'seeds' ? 'Seed sources' : activeLayer === 'regulations' ? 'GMO regulations' : 'GeoFences'}</h3>
+            {activeLayer === 'seeds' ? (
+              <div className="space-y-2">
+                <div className="flex items-center"><span className="mr-2 h-3 w-3 rounded-full bg-green-600" /><span className="text-sm">Organic seeds</span></div>
+                <div className="flex items-center"><span className="mr-2 h-3 w-3 rounded-full bg-red-600" /><span className="text-sm">GMO seeds</span></div>
+              </div>
+            ) : (
+              <p className="max-w-52 text-xs text-gray-600">Connect a boundary dataset to display this layer.</p>
+            )}
+          </div>
+
+          <div className="absolute right-4 top-4 flex flex-col overflow-hidden rounded-md bg-white shadow-md">
+            <button type="button" className="p-2 hover:bg-gray-100" aria-label="Zoom in" title="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" /></svg>
+            </button>
+            <button type="button" className="border-t border-gray-200 p-2 hover:bg-gray-100" aria-label="Zoom out" title="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
+            </button>
+            <button type="button" className="border-t border-gray-200 p-2 hover:bg-gray-100" aria-label="Reset map view" title="Reset map view" onClick={resetMapView}>
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /></svg>
+            </button>
+          </div>
         </div>
 
         {/* Seed Data Table */}
@@ -180,7 +231,7 @@ const GeoMapping = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {mockSeedLocations.map((location) => (
+                {filteredSeedLocations.map((location) => (
                   <tr key={location.id}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">#{location.id}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -199,6 +250,9 @@ const GeoMapping = () => {
                     </td>
                   </tr>
                 ))}
+                {filteredSeedLocations.length === 0 && (
+                  <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-gray-500">No seed locations match your search.</td></tr>
+                )}
               </tbody>
             </table>
           </div>

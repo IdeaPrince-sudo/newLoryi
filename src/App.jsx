@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -19,6 +19,13 @@ import TerraQ from './components/modules/terraQ/Home';
 import FloatingChat from './components/modules/terraQ/FloatingChat';
 import FertiWise from './components/modules/fertiwise';
 import SeedLinModule from './components/modules/seedLin/dashboard';
+import CreditTrackModule from './components/modules/credittrack/CreditTrackModule';
+import AgroMartModule from './components/modules/agromart/AgroMartModule';
+import UpdateXModule from './components/modules/updatex/UpdateXModule';
+import AgriDomainDashboard from './components/modules/agriDomains/AgriDomainDashboard';
+import LivestockDashboard from './components/modules/agriDomains/LivestockDashboard';
+import ForestryDashboard from './components/modules/agriDomains/ForestryDashboard';
+import FisheriesDashboard from './components/modules/agriDomains/FisheriesDashboard';
 
 import MobileNavigation from './components/mobileNavigation';
 
@@ -28,6 +35,7 @@ import MobileNavigation from './components/mobileNavigation';
 // ✅ Layout now takes credits props
 const Layout = ({ children, credits, useCredits, updateCredits }) => {
   const { currentUser } = useAuth();
+  const location = useLocation();
 
   if (!currentUser) return <Navigate to="/login" />;
 
@@ -38,7 +46,7 @@ const Layout = ({ children, credits, useCredits, updateCredits }) => {
         <Sidebar credits={credits} />
         <main className="flex-1 p-6 overflow-auto">
           {children}
-          <FloatingChat/>
+          {location.pathname !== '/terraq' && <FloatingChat />}
           <MobileNavigation/>
         </main>
       </div>
@@ -120,11 +128,47 @@ function App() {
               </Layout>
             </ProtectedRoute>
           } />
+
+          {/* ✅ CreditTrack */}
+          <Route path="/credittrack" element={
+            <ProtectedRoute requiredModule="CreditTrack">
+              <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
+                <CreditTrackModule />
+              </Layout>
+            </ProtectedRoute>
+          } />
           {/* ✅ AgroMart */}
           <Route path="/agromart" element={
             <ProtectedRoute requiredModule="AgroMart">
               <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
-                <ModulePlaceholder title="AgroMart" description="Marketplace for agri tools..." />
+                <AgroMartModule />
+              </Layout>
+            </ProtectedRoute>
+          } />
+
+          {/* ✅ Livestock */}
+          <Route path="/livestock" element={
+            <ProtectedRoute requiredModule="Livestock">
+              <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
+                <LivestockDashboard />
+              </Layout>
+            </ProtectedRoute>
+          } />
+
+          {/* ✅ Forestry */}
+          <Route path="/forestry" element={
+            <ProtectedRoute requiredModule="Forestry">
+              <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
+                <ForestryDashboard />
+              </Layout>
+            </ProtectedRoute>
+          } />
+
+          {/* ✅ Fisheries & Aquaculture */}
+          <Route path="/fisheries" element={
+            <ProtectedRoute requiredModule="Fisheries & Aquaculture">
+              <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
+                <FisheriesDashboard />
               </Layout>
             </ProtectedRoute>
           } />
@@ -140,7 +184,7 @@ function App() {
 
           {/* ✅ AgriTrack */}
           <Route path="/agritrack" element={
-            <ProtectedRoute requiredModule="FarmIQ">
+            <ProtectedRoute requiredModule="AgriTrack">
               <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
                 <AgriTrack title="AgriTrack" description="Track farming activities..." />
               </Layout>
@@ -165,16 +209,14 @@ function App() {
             </ProtectedRoute>
           } />
 
-           {/* ✅ UpdateX
-           <Route path="/updatex" element={
-            <ProtectedRoute requiredModule="Updatex">
+          {/* ✅ UpdateX */}
+          <Route path="/updatex" element={
+            <ProtectedRoute requiredModule="UpdateX">
               <Layout credits={credits} useCredits={useCredits} updateCredits={updateCredits}>
-                <SocialProvider>
-                <UpdateX title="Updatex" description="Social" />
-                </SocialProvider>
+                <UpdateXModule />
               </Layout>
             </ProtectedRoute>
-          } /> */}
+          } />
 
           {/* ✅ Account (Recharge Credits) */}
           <Route path="/account" element={

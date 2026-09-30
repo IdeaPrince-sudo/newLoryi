@@ -1,24 +1,23 @@
-export default function SmartRemindersPanel() {
-    const reminders = [
-      {
-        icon: "🌦️",
-        message: "Showers expected tomorrow — avoid pesticide spraying",
-      },
-      {
-        icon: "🔥",
-        message: "High heat alert — irrigate maize early morning",
-      },
-      {
-        icon: "🦠",
-        message: "Risk of fungal disease — apply preventive spray",
-      },
-    ];
+import { useEffect, useState } from 'react';
+import { api } from '../../../lib/api';
+
+export default function SmartRemindersPanel({ location = { name: 'Greater Accra' } }) {
+    const [reminders, setReminders] = useState([]);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+      api.weather(location)
+        .then((weather) => setReminders(weather.reminders))
+        .catch((requestError) => setError(requestError.message || 'Unable to load live reminders.'));
+    }, [location]);
   
     return (
       <div className="bg-white shadow rounded-lg p-4 border border-gray-200">
         <h2 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
           🔔 <span className="ml-2">Smart Reminders</span>
         </h2>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {!error && !reminders.length && <p className="text-sm text-gray-500">Loading live reminders...</p>}
         <ul className="space-y-3">
           {reminders.map((reminder, index) => (
             <li

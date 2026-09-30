@@ -51,7 +51,7 @@ const FarmHistory = () => {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="year" />
                   <YAxis />
-                  <Tooltip formatter={(value) => [`$${value}`, '']} />
+                  <Tooltip formatter={(value) => [`GH₵${Number(value).toLocaleString()}`, '']} />
                   <Legend />
                   <Bar dataKey="revenue" name="Revenue" fill="#22c55e" />
                   <Bar dataKey="expenses" name="Expenses" fill="#ef4444" />
@@ -71,7 +71,7 @@ const FarmHistory = () => {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="year" />
                   <YAxis />
-                  <Tooltip formatter={(value) => [`$${value}`, 'Profit']} />
+                  <Tooltip formatter={(value) => [`GH₵${Number(value).toLocaleString()}`, 'Profit']} />
                   <Legend />
                   <Line 
                     type="monotone" 
